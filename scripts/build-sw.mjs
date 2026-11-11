@@ -49,7 +49,15 @@ const PRECACHE_DIRS = [
   ["fonts", /\.woff2$/],
 ];
 
-const toUrl = (file) => `/${path.relative(dist, file).split(path.sep).join("/")}`;
+/**
+ * Deployment base path. "/" for a normal root deploy, "/paperly/" (or any
+ * sub-path) when the built app is served from a project site. "./" is a
+ * relative CDN build, where the worker is not registered anyway.
+ */
+const RAW_BASE = process.env.PAPERLY_BASE || "/";
+const BASE = RAW_BASE === "./" ? "/" : RAW_BASE.endsWith("/") ? RAW_BASE : `${RAW_BASE}/`;
+
+const toUrl = (file) => `${BASE}${path.relative(dist, file).split(path.sep).join("/")}`;
 
 function listFiles(dir) {
   if (!fs.existsSync(dir)) return [];
@@ -83,7 +91,7 @@ function buildPrecacheList() {
 
   // Remote worker sources are already content-versioned; cache them at runtime only.
   for (const url of files.keys()) {
-    if (/\.map$/.test(url) || url === "/sw.js") files.delete(url);
+    if (/\.map$/.test(url) || url.endsWith("/sw.js")) files.delete(url);
   }
 
   const entries = [...files.entries()]
@@ -110,7 +118,7 @@ function serviceWorkerSource(precacheUrls, cacheName) {
 const PRECACHE_URLS = ${precache};
 const PRECACHE_CACHE = ${JSON.stringify(cacheName)};
 const RUNTIME_CACHE = ${JSON.stringify(RUNTIME_CACHE)};
-const APP_SHELL = "/index.html";
+const APP_SHELL = ${JSON.stringify(`${BASE}index.html`)};
 const KEEP_CACHES = new Set([PRECACHE_CACHE, RUNTIME_CACHE]);
 
 // Pinned third-party hosts the OCR feature fetches its engine and language data from.

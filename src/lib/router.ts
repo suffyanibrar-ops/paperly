@@ -63,7 +63,13 @@ export function startTool(toolId: string, files: File[] = []) {
 export function currentPath(): string {
   const hash = window.location.hash.replace(/^#/, "");
   if (hash.startsWith("/")) return hash;
-  const pathname = window.location.pathname;
+  const base = import.meta.env.BASE_URL || "/";
+  let pathname = window.location.pathname;
+  // Project sites are served under a sub-path (e.g. /paperly/): strip it so the
+  // same route table works for root deployments and GitHub Pages alike.
+  if (base !== "/" && base !== "./" && pathname.startsWith(base)) {
+    pathname = `/${pathname.slice(base.length)}`;
+  }
   const search = window.location.search;
   const normalised = `${pathname}${search}` || "/";
   return normalised.startsWith("/") ? normalised : `/${normalised}`;
