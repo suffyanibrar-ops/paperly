@@ -1,7 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-label="Paperly PDF">
-  <title>Paperly PDF</title>
-  <rect width="512" height="512" fill="#12211a"/>
-  <path d="M166 112h120l60 60v228H166z" fill="#f7f4ec"/>
-  <path d="M286 112v60h60" fill="#d9f26c"/>
-  <path d="M212 258h116M212 306h116M212 354h68" stroke="#12211a" stroke-width="18" stroke-linecap="round"/>
-</svg>
