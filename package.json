@@ -6,6 +6,9 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build && node scripts/copy-worker.cjs && node scripts/prerender.mjs && node scripts/build-sw.mjs",
+    "fixtures": "node scripts/e2e-fixtures.cjs",
+    "pretest": "node scripts/e2e-fixtures.cjs",
+    "pretest:coverage": "node scripts/e2e-fixtures.cjs",
     "preview": "vite preview",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
