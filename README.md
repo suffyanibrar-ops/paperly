@@ -1,5 +1,7 @@
 # Paperly PDF
 
+[![CI](https://github.com/suffyanibrar-ops/paperly/actions/workflows/ci.yml/badge.svg)](https://github.com/suffyanibrar-ops/paperly/actions/workflows/ci.yml)
+
 A commercial-grade, privacy-first PDF platform. **50 working tools** run inside the browser — documents are never uploaded to a server.
 
 Production: <https://paperlypdf.netlify.app/>
