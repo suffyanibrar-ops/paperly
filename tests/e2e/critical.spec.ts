@@ -41,7 +41,7 @@ test.describe("critical PDF workflows", () => {
     await page.goto("/#/tools");
     await expect(page.locator('a[href^="#/tool/"]').first()).toBeVisible();
     const unique = await page.locator('a[href^="#/tool/"]').evaluateAll((els) => new Set(els.map((el) => el.getAttribute("href"))).size);
-    expect(unique).toBe(50);
+    expect(unique).toBe(51);
     expect(errors).toEqual([]);
   });
 

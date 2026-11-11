@@ -4,7 +4,7 @@ import { REGISTERED_TOOL_IDS } from "@/pages/ToolPage";
 
 describe("tool registry", () => {
   it("contains the full advertised catalogue", () => {
-    expect(TOOLS).toHaveLength(50);
+    expect(TOOLS).toHaveLength(51);
     expect(Object.keys(TOOL_MAP)).toHaveLength(TOOLS.length);
   });
 

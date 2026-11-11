@@ -112,7 +112,7 @@ export default function App() {
       title = titles[path] ?? "Page not found — Paperly";
       description =
         path === "/"
-          ? "50 PDF tools that run entirely in your browser: merge, compress, OCR, redact, ask, inspect, sanitize, convert, sign and fill forms. No uploads, no accounts, no file-size tiers."
+          ? "51 PDF tools that run entirely in your browser: merge, compress, OCR, redact, ask, inspect, sanitize, convert, sign and fill forms. No uploads, no accounts, no file-size tiers."
           : path === "/tools"
             ? "Browse every Paperly PDF tool across organize, convert, optimize, secure and intelligence categories."
             : path === "/vs-ilovepdf"

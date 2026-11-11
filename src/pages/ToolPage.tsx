@@ -71,6 +71,7 @@ const TOOL_COMPONENTS: Record<string, LazyExoticComponent<ComponentType>> = {
   bookmarks: lazyTool(() => import("@/tools/Structure"), "BookmarksTool"),
   "split-bookmarks": lazyTool(() => import("@/tools/Structure"), "SplitByBookmarksTool"),
   "tables-to-csv": lazyTool(() => import("@/tools/DataExtract"), "TablesToCsvTool"),
+  workflow: lazyTool(() => import("@/tools/Workflow"), "WorkflowTool"),
 };
 
 export const REGISTERED_TOOL_IDS = Object.keys(TOOL_COMPONENTS);
@@ -93,6 +94,7 @@ const WIDE_TOOLS = new Set([
   "find-redact",
   "bookmarks",
   "tables-to-csv",
+  "workflow",
 ]);
 
 function ToolLoading() {

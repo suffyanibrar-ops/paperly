@@ -329,6 +329,7 @@ export default function Home() {
             </div>
             <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
               {[
+                { id: "workflow", label: "PDF Workflow", note: "Chain up to 8 steps" },
                 { id: "ask-pdf", label: "Ask Your PDF", note: "Cited answers · fully local" },
                 { id: "inspect-pdf", label: "Inspect PDF", note: "Metadata · fonts · risks" },
                 { id: "find-redact", label: "Find & Redact", note: "Bulk patterns · truly gone" },

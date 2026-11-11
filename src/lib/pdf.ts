@@ -26,7 +26,7 @@ function bootWorker() {
   if (workerBooted || typeof window === "undefined") return;
   // The worker is shipped as a separate same-origin asset (see scripts/copy-worker.cjs).
   // If it cannot be fetched, PDF.js falls back to its fake worker automatically.
-  pdfjs.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
+  pdfjs.GlobalWorkerOptions.workerSrc = `${import.meta.env.BASE_URL}pdf.worker.min.mjs`;
   workerBooted = true;
 }
 

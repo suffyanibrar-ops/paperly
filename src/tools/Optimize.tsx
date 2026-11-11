@@ -30,6 +30,7 @@ import {
   Segmented,
   Select,
   StepHeader,
+  TextInput,
   inputClass,
 } from "@/components/ui";
 import { DownloadPanel, RangeField, SinglePdfInput } from "@/components/toolParts";
@@ -54,6 +55,9 @@ interface CompressResult {
   flattenedSize?: number;
   originalSize: number;
   pages: number;
+  /** When the user asked for a specific output size. */
+  targetBytes?: number;
+  targetMet?: boolean;
 }
 
 export async function recompressImages(
@@ -142,6 +146,7 @@ export function CompressTool() {
   const initial = useInitialFiles();
   const pdf = usePdfFile(initial);
   const [level, setLevel] = useState<Level>("balanced");
+  const [targetMB, setTargetMB] = useState("");
   const [busy, setBusy] = useState(false);
   const [phase, setPhase] = useState("");
   const [progress, setProgress] = useState(0);
@@ -175,14 +180,44 @@ export function CompressTool() {
         // Never suggest a “smaller” version that is actually larger.
         if (flattened.byteLength >= optimized.bytes.byteLength) flattened = undefined;
       }
+      let chosen = optimized.bytes;
+      let targetBytes: number | undefined;
+      let targetMet: boolean | undefined;
+      const requestedMB = Number(targetMB);
+      if (targetMB.trim() && Number.isFinite(requestedMB) && requestedMB > 0) {
+        targetBytes = Math.round(requestedMB * 1024 * 1024);
+        const candidates: Uint8Array[] = [optimized.bytes];
+        if (flattened) candidates.push(flattened);
+        const underTarget = (list: Uint8Array[]) => list.some((item) => item.byteLength <= targetBytes!);
+        if (!underTarget(candidates) && pdf.pageCount <= 150) {
+          const attempts: { quality: number; maxDimension: number }[] = [LEVELS.strong, { quality: 0.35, maxDimension: 1100 }, { quality: 0.26, maxDimension: 900 }];
+          for (const config of attempts) {
+            setPhase("Pushing harder to reach your target size…");
+            const attempt = await recompressImages(pdf.bytes, config, () => undefined);
+            candidates.push(attempt.bytes);
+            if (underTarget(candidates)) break;
+            if (pdf.pageCount <= 60) {
+              setPhase("Flattening pages to reach your target size…");
+              candidates.push(await flattenPdf(pdf.bytes, { targetWidth: 900, quality: 0.42 }, () => undefined));
+              if (underTarget(candidates)) break;
+            }
+          }
+        }
+        const fits = candidates.filter((item) => item.byteLength <= targetBytes!).sort((a, b) => a.byteLength - b.byteLength);
+        chosen = (fits[0] ?? [...candidates].sort((a, b) => a.byteLength - b.byteLength)[0])!;
+        targetMet = chosen.byteLength <= targetBytes;
+        flattened = undefined;
+      }
       setResult({
-        optimized: optimized.bytes,
-        optimizedSize: optimized.bytes.byteLength,
+        optimized: chosen,
+        optimizedSize: chosen.byteLength,
         imagesChanged: optimized.changed,
         flattened,
         flattenedSize: flattened?.byteLength,
         originalSize: pdf.file.size,
         pages: pdf.pageCount,
+        targetBytes,
+        targetMet,
       });
       setChoice(flattened && flattened.byteLength < optimized.bytes.byteLength ? "flattened" : "optimized");
       setProgress(100);
@@ -218,6 +253,27 @@ export function CompressTool() {
               }))}
             />
           </div>
+          <Field
+            label="Target size (optional)"
+            hint="Enter a size in MB and Paperly will keep pushing compression until the file fits — or return the smallest achievable result and tell you honestly."
+          >
+            <div className="flex items-center gap-2">
+              <TextInput
+                type="number"
+                min={0.05}
+                step={0.05}
+                inputMode="decimal"
+                value={targetMB}
+                placeholder={pdf.file ? `e.g. ${Math.max(0.1, Number((pdf.file.size / 1024 / 1024 / 2).toFixed(1)))}` : "e.g. 1.5"}
+                onChange={(event) => {
+                  setTargetMB(event.target.value);
+                  setResult(null);
+                }}
+                className="max-w-[180px]"
+              />
+              <span className="text-[12px] text-muted">MB</span>
+            </div>
+          </Field>
           <div className="rounded-xl border border-line bg-bone-deep/35 p-3.5 text-[12px] leading-relaxed text-ink/75">
             <p className="flex items-center gap-1.5 font-semibold text-forest">
               <Gauge className="h-3.5 w-3.5" /> Smarter than flattening everything
@@ -252,6 +308,12 @@ export function CompressTool() {
                   {formatBytes(result.originalSize)} → {formatBytes(activeSize)}
                   {result.imagesChanged ? ` · ${result.imagesChanged} photo${result.imagesChanged === 1 ? "" : "s"} re-encoded` : ""}
                 </p>
+                {result.targetBytes && (
+                  <p className="mt-1.5 inline-flex items-center gap-1.5 rounded-full bg-paper/10 px-2.5 py-1 text-[11px] font-medium">
+                    <Gauge className="h-3 w-3 text-lime" />
+                    Target {formatBytes(result.targetBytes)} · {result.targetMet ? "reached" : "not reachable without OCR-quality loss"}
+                  </p>
+                )}
               </div>
             </div>
             <div className="mt-4 grid gap-2 sm:grid-cols-2">

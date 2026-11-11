@@ -1,4 +1,4 @@
-import { Check, Eye, EyeOff, KeyRound, Lock, LockKeyhole, ShieldCheck, Unlock } from "lucide-react";
+import { Check, Copy, Eye, EyeOff, KeyRound, Lock, LockKeyhole, RefreshCw, ShieldCheck, Unlock } from "lucide-react";
 import { useEffect, useState } from "react";
 import { PDFDocument, baseName, downloadBytes, formatBytes, openPdfLib, readFileBytes, sanitizeName } from "@/lib/pdf";
 import { useInitialFiles, usePdfFile } from "@/lib/usePdf";
@@ -17,6 +17,24 @@ import { cn } from "@/utils/cn";
 /* ================================================================== *
  * PROTECT
  * ================================================================== */
+const PASSPHRASE_WORDS = [
+  "amber", "basalt", "cedar", "delta", "ember", "fjord", "garnet", "harbor", "indigo", "jungle",
+  "kestrel", "lantern", "meadow", "nimbus", "onyx", "prairie", "quartz", "raven", "silver", "tundra",
+  "umber", "violet", "willow", "xenon", "yarrow", "zephyr", "cobalt", "dune", "flint", "grove",
+];
+
+/** Cryptographically-random passphrase: 4 words + digits + symbol (~60 bits). */
+export function generatePassphrase(): string {
+  const random = (max: number) => {
+    const buffer = new Uint32Array(1);
+    crypto.getRandomValues(buffer);
+    return buffer[0] % max;
+  };
+  const words = Array.from({ length: 4 }, () => PASSPHRASE_WORDS[random(PASSPHRASE_WORDS.length)]);
+  const symbol = "!@#$%&*?+"[random(9)];
+  return `${words.join("-")}-${random(90) + 10}${symbol}`;
+}
+
 function passwordScore(pw: string) {
   let score = 0;
   if (pw.length >= 8) score++;
@@ -33,6 +51,7 @@ export function ProtectTool() {
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
   const [show, setShow] = useState(false);
+  const [copiedPassword, setCopiedPassword] = useState(false);
   const [ownerPassword, setOwnerPassword] = useState("");
   const [allowPrinting, setAllowPrinting] = useState(true);
   const [allowCopying, setAllowCopying] = useState(false);
@@ -168,6 +187,43 @@ export function ProtectTool() {
               </p>
             </div>
           )}
+
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              type="button"
+              onClick={() => {
+                const generated = generatePassphrase();
+                setPassword(generated);
+                setConfirm(generated);
+                setShow(true);
+                setResult(null);
+                setCopiedPassword(false);
+              }}
+            >
+              <RefreshCw className="h-3.5 w-3.5" /> Generate strong passphrase
+            </Button>
+            {password && (
+              <Button
+                variant="ghost"
+                size="sm"
+                type="button"
+                onClick={async () => {
+                  try {
+                    await navigator.clipboard.writeText(password);
+                    setCopiedPassword(true);
+                  } catch {
+                    /* clipboard unavailable */
+                  }
+                }}
+              >
+                {copiedPassword ? <Check className="h-3.5 w-3.5 text-forest" /> : <Copy className="h-3.5 w-3.5" />}
+                {copiedPassword ? "Copied" : "Copy password"}
+              </Button>
+            )}
+            <span className="text-[11px] text-muted">Generated locally with the Web Crypto API. Store it in your password manager.</span>
+          </div>
 
           <div className="rounded-xl border border-line bg-bone-deep/30 p-3.5">
             <p className="mb-2 text-[11px] font-semibold uppercase tracking-[0.09em] text-ink/75">Permissions for readers</p>

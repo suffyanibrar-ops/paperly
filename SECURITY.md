@@ -1,6 +1,6 @@
 # Security policy and verified controls
 
-_Last verified: production-build audit, November 2026 (50-tool split build)._
+_Last verified: production-build audit, November 2026 (51-tool split build)._
 
 ## Threat model
 

@@ -44,6 +44,7 @@ import {
   ListOrdered,
   TextCursorInput,
   Unlock,
+  Workflow,
   Wrench,
 } from "lucide-react";
 
@@ -1023,6 +1024,26 @@ export const TOOLS: Tool[] = [
     ],
     note: "Only the standard Info dictionary is rewritten. If a file also carries XMP metadata, that copy may keep the old values; use Sanitize PDF to remove XMP entirely.",
     related: ["inspect-pdf", "sanitize", "protect"],
+    new: true,
+  },
+  {
+    id: "workflow",
+    name: "PDF Workflow",
+    tagline: "Chain several operations across many PDFs in one pass.",
+    description:
+      "Build a recipe — rotate, remove or extract pages, add a watermark, number pages, compress, merge and encrypt — then run it across up to twenty PDFs at once. One pipeline instead of repeating single tools file by file.",
+    category: "organize",
+    icon: Workflow,
+    accepts: PDF,
+    acceptLabel: "PDFs to process as a pipeline",
+    multiple: true,
+    steps: [
+      "Add the PDFs you want to process together.",
+      "Build the pipeline: add, configure and reorder up to eight operations.",
+      "Choose merged or ZIP output, optionally encrypt, then run it locally.",
+    ],
+    note: "Structural steps rebuild the page tree; compression re-encodes embedded photos; encryption uses AES-256 and is verified. A pipeline is bounded to 20 files, 8 steps and 1,000 pages per file — use the dedicated tool for anything larger.",
+    related: ["batch", "compress", "protect"],
     new: true,
   },
   {

@@ -2,15 +2,15 @@
 
 [![CI](https://github.com/suffyanibrar-ops/paperly/actions/workflows/ci.yml/badge.svg)](https://github.com/suffyanibrar-ops/paperly/actions/workflows/ci.yml)
 
-A commercial-grade, privacy-first PDF platform. **50 working tools** run inside the browser — documents are never uploaded to a server.
+A commercial-grade, privacy-first PDF platform. **51 working tools** run inside the browser — documents are never uploaded to a server.
 
 Production: <https://paperlypdf.netlify.app/>
 
 ## What it does
 
-- **Organize** — merge, split, reorder, rotate, crop, n-up, page numbers, headers/footers, Bates numbering, resize, edit bookmarks, split by bookmarks.
+- **Organize** — merge, split, reorder, rotate, crop, n-up, page numbers, headers/footers, Bates numbering, resize, edit bookmarks, split by bookmarks, and a **PDF Workflow** builder that chains up to eight operations across twenty files in one run.
 - **Convert** — PDF ⇄ Word, Excel, PowerPoint, images, Markdown, HTML, text and CSV tables.
-- **Optimize** — compress, repair, flatten, extract images, archive readiness.
+- **Optimize** — compress (including a **target file size** mode), repair, flatten, extract images, archive readiness.
 - **Secure** — AES-256 protect/unlock, redact, find & redact by pattern, fill forms, create forms, sign, watermark, sanitize active content and metadata.
 - **Intelligence** — extract text, OCR (18 languages), compare versions, summarise, ask a question across documents, inspect a PDF’s full structure and risk surface.
 - **Platform** — command palette, local activity history, batch processing, installable offline PWA, no account, no uploads, no daily limits.
@@ -36,7 +36,7 @@ Production: <https://paperlypdf.netlify.app/>
 | Build | First load (gzip) | Notes |
 | --- | --- | --- |
 | Previous single-file bundle | **1,086 KB** | One inlined `index.html` (3.37 MB raw) duplicated into every prerendered route; 176 MB `dist` |
-| Current split build | **~128 KB** | Entry 114 KB + CSS 13.5 KB + preload helper 0.6 KB; PDF/Office/OCR engines load on demand; ~6.4 MB `dist` |
+| Current split build | **~131 KB** | Entry 118 KB + CSS 13.5 KB + preload helper 0.6 KB; PDF/Office/OCR engines load on demand; ~6.4 MB `dist` |
 
 Heavy vendors are grouped per package (`vendor-pdfjs`, `vendor-pdf-lib`, `vendor-ocr`, `vendor-spreadsheet`, …) so a shared chunk never drags an unused engine into the first paint. Route pages and tool interfaces are lazy; a tool’s engine is only fetched when that tool is opened.
 
@@ -53,7 +53,7 @@ src/lib/knowledge.ts     deterministic BM25-style retrieval for Ask Your PDF
 src/lib/redactPatterns.ts pattern presets, matching, Luhn/IBAN validation, reports
 src/lib/outline.ts       outline tree flattening, split ranges, heading detection, outline writing
 src/lib/tables.ts        table region/column detection, cell assembly, RFC-4180 CSV
-src/lib/toolRegistry.ts  single source of truth for all 50 tools (also parsed by the prerenderer)
+src/lib/toolRegistry.ts  single source of truth for all 51 tools (also parsed by the prerenderer)
 src/tools/               tool implementations grouped by domain
 src/pages/               marketing, legal, help, guides, comparison and activity pages
 scripts/prerender.mjs    static SEO generation (titles, canonicals, OG, JSON-LD, sitemap, OG image)
@@ -66,7 +66,7 @@ tests/e2e                Playwright output-verification suites
 ## Testing
 
 - `tests/unit` — 220+ Vitest tests. `security.ts` is coverage-gated at 70%; text geometry, retrieval ranking, redaction patterns, outline math, table/CSV generation and app registry all have dedicated suites. A registry consistency test enforces 50 unique tools, valid related-tool links and **a renderer for every registered tool**.
-- `tests/e2e` — Playwright suites against a production-parity server (real CSP, gzip, prerendered routes). `matrix-a.spec.ts` and `matrix-b.spec.ts` exercise every registered tool with generated-output assertions (page counts, extracted text, form values, encryption, ZIP contents, image signatures, metadata, outline targets, CSV cells) plus malformed-input, malicious-archive, wrong-password and 120-page large-file cases. `power.spec.ts` covers the eight newest tools end-to-end plus the offline service worker. The full suite is **73 tests** (critical 8, matrix-a 25, matrix-b 26, power 12, mobile 2) and runs green in ~2 minutes against the production build.
+- `tests/e2e` — Playwright suites against a production-parity server (real CSP, gzip, prerendered routes). `matrix-a.spec.ts` and `matrix-b.spec.ts` exercise every registered tool with generated-output assertions (page counts, extracted text, form values, encryption, ZIP contents, image signatures, metadata, outline targets, CSV cells) plus malformed-input, malicious-archive, wrong-password and 120-page large-file cases. `power.spec.ts` covers the eight newest tools end-to-end plus the offline service worker. The full suite is **74 tests** (critical 8, matrix-a 25, matrix-b 26, power 12, mobile 2) and runs green in ~2 minutes against the production build.
 - Every tool is verified by its **output**, not by whether a button rendered.
 
 ## Commands

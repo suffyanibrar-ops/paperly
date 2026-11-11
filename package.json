@@ -60,7 +60,7 @@
   "overrides": {
     "image-size": "2.0.4"
   },
-  "description": "Paperly PDF — 50 private, in-browser PDF tools with no document uploads",
+  "description": "Paperly PDF — 51 private, in-browser PDF tools with no document uploads",
   "engines": {
     "node": ">=20"
   }

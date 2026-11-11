@@ -42,6 +42,9 @@ function vendorChunk(id: string): string | undefined {
 
 // https://vite.dev/config/
 export default defineConfig({
+  // Absolute base for normal deployments; set PAPERLY_BASE=./ (or a subpath like
+  // /paperly/) when the built app is served from a CDN subdirectory.
+  base: process.env.PAPERLY_BASE || "/",
   plugins: [react(), tailwindcss()],
   resolve: {
     alias: {

@@ -272,7 +272,7 @@ test("inventory: every tool page is registered and renders", async ({ page }) =>
   const fs = await import("node:fs/promises");
   const registry = await fs.readFile("src/lib/toolRegistry.ts", "utf8");
   const ids = [...registry.matchAll(/^ {4}id: "([a-z0-9-]+)"/gm)].map((match) => match[1]);
-  expect(ids.length).toBe(50);
+  expect(ids.length).toBe(51);
   const crashed: string[] = [];
   for (const id of ids) {
     await page.goto(`/#/tool/${id}`);
