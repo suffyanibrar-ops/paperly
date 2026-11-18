@@ -77,7 +77,7 @@
 
 ### 3.5 PDF core — `src/lib/pdf.ts`
 
-- PDF.js loading task with an explicit `destroy()`, page limit (1000), canvas pixel cap (40 MP).
+- PDF.js **legacy build** loading task (Safari-compatible iterator/withResolvers polyfills) with an explicit `destroy()`, page limit (1000), canvas pixel cap (40 MP).
 - pdf-lib helpers for load/save, fonts, safe WinAnsi text, wrapping, colours and downloads.
 - All tools dispose PDF.js documents; memory is released page by page via `page.cleanup()`.
 

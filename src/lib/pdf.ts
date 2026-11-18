@@ -1,6 +1,10 @@
 /// <reference types="vite/client" />
 import { PDFDocument, StandardFonts, degrees, rgb, type PDFFont, type PDFPage } from "@cantoo/pdf-lib";
-import * as pdfjs from "pdfjs-dist";
+// PDF.js 6 uses ES2025 iterator helpers (Iterator.prototype.join) and
+// Promise.withResolvers. Safari before 18.4 lacks the Iterator global and
+// throws "Can't find variable: Iterator". The legacy build ships the required
+// polyfills; the modern build stays available for engines that have them.
+import * as pdfjs from "pdfjs-dist/legacy/build/pdf.mjs";
 import type { PDFDocumentProxy, PDFPageProxy } from "pdfjs-dist";
 import JSZip from "jszip";
 import { fileExt } from "@/lib/format";

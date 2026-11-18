@@ -25,7 +25,7 @@ targets and CSV cells.
 | --- | --- | --- |
 | Chrome / Edge (evergreen) | Primary | Full PDF.js, OCR wasm, Web Share, clipboard image copy |
 | Firefox (evergreen) | Supported | Clipboard image copy limited; share sheet often absent (buttons hide) |
-| Safari 17+ | Supported | Web Share preferred; large canvases are released aggressively after each page |
+| Safari 16.4+ | Supported | Legacy PDF.js build supplies iterator-helper / `Promise.withResolvers` polyfills; Web Share preferred; large canvases are released after each page |
 | Mobile Safari / Chrome | Supported | Camera capture in Scan requires HTTPS and user permission |
 | IE / legacy Edge | Not supported | ES2020 modules and WASM |
 

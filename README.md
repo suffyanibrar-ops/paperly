@@ -23,7 +23,7 @@ Every tool also has an **Advanced options** panel with persisted settings and a 
 | --- | --- |
 | UI | React 19 + TypeScript, Tailwind CSS 4, Vite 7 |
 | Routing | Hash routes for resilient static hosting + real path URLs for the prerendered Netlify deployment; route-level `React.lazy` splitting |
-| PDF engine | PDF.js 6.2.108 (render, text, outline), `@cantoo/pdf-lib` 2.11.1 (rewrite, AES-256, forms, outline writing) |
+| PDF engine | PDF.js 6.2.108 **legacy build** (render, text, outline; ships iterator-helper/withResolvers polyfills for Safari), `@cantoo/pdf-lib` 2.11.1 (rewrite, AES-256, forms, outline writing) |
 | Shared engines | `job` (progress/ETA/cancel/retry), `prefs` (versioned local settings), `pageQuery` (ranges, odd/even/last/steps), `output` (naming, MIME, preview data, SHA-256), `sample` (local demo documents) |
 | UX layer | `AdvancedOptions` presets/panels, `PagePicker`, `OutputPreview`, shared `DownloadPanel` (rename/preview/copy/share/checksum) |
 | OCR | Tesseract.js 6 (WASM worker); engine and language data are fetched from pinned CDNs on first use, then cached by the service worker |
@@ -135,7 +135,7 @@ node scripts/e2e-fixtures.cjs  # regenerate the synthetic PDF/DOCX fixtures
 5. **Office conversion is text-first**; complex layout fidelity is not guaranteed.
 6. **Certified compliance, native apps, cloud-storage integrations and AI translation are not offered.** The comparison page says so explicitly.
 7. **Service-worker updates apply on the next navigation** (the new worker activates immediately and the page reloads on the following visit). Clear site data to force a hard reset.
-8. **Browser support**: modern Chromium, Firefox and Safari. The e2e suite runs in Chromium only.
+8. **Browser support**: modern Chromium, Firefox and Safari 16.4+. PDF.js runs from its legacy build so Safari versions without ES2025 iterator helpers do not fail with “Can’t find variable: Iterator”. The e2e suite runs in Chromium only.
 
 ## Deployment (Netlify)
 

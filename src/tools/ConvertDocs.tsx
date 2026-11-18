@@ -13,7 +13,7 @@ import * as XLSX from "xlsx";
 import pptxgen from "pptxgenjs";
 import { AlignmentType, Document, HeadingLevel, ImageRun, Packer, Paragraph, TextRun } from "docx";
 import { PDFArray, PDFDict, PDFHexString, PDFName, PDFNumber } from "@cantoo/pdf-lib";
-import { OPS } from "pdfjs-dist";
+import { OPS } from "pdfjs-dist/legacy/build/pdf.mjs";
 import type { PDFDocumentProxy } from "pdfjs-dist";
 import {
   PDFDocument,

@@ -9,7 +9,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 
 const root = path.resolve(__dirname, "..");
-const source = path.join(root, "node_modules/pdfjs-dist/build/pdf.worker.min.mjs");
+const source = path.join(root, "node_modules/pdfjs-dist/legacy/build/pdf.worker.min.mjs");
 const target = path.join(root, "dist/pdf.worker.min.mjs");
 
 if (!fs.existsSync(source)) {
