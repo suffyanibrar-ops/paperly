@@ -1,0 +1,25 @@
+node_modules/
+dist/
+coverage/
+test-results/
+playwright-report/
+tests/e2e-output/
+*.local
+.DS_Store
+
+# Local tooling
+.npm-cache/
+tests/results/
+.playwright/
+
+# Generated Playwright fixtures (run scripts/e2e-fixtures.cjs)
+tests/fixtures/*.pdf
+tests/fixtures/*.png
+tests/fixtures/*.jpg
+tests/fixtures/*.docx
+tests/fixtures/*.xlsx
+tests/fixtures/*.pptx
+tests/fixtures/*.zip
+
+# Playwright browser downloads kept inside the workspace
+.pw-browsers/
