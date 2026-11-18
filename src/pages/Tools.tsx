@@ -177,7 +177,7 @@ function FilterPill({ active, onClick, label, count, dot }: { active: boolean; o
     >
       {dot && <span className={cn("h-1.5 w-1.5 rounded-full", active ? "bg-lime" : dot)} />}
       {label}
-      <span className="text-ink/75">{count}</span>
+      <span className={cn("tabular-nums", active ? "text-paper/80" : "text-ink/75")}>{count}</span>
     </button>
   );
 }

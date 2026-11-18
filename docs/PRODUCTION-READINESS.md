@@ -12,7 +12,7 @@ npm run typecheck      # tsc --noEmit
 npm run lint           # eslint .
 npm test               # fixtures + 313 Vitest tests
 npm run build          # vite build + worker copy + SEO prerender + service worker
-npm run test:e2e       # 76 Playwright cases against the production build
+npm run test:e2e       # 77 Playwright cases against the production build
 ```
 
 A release is blocked by any failing gate. The E2E suite verifies **outputs**, not just rendered buttons:
@@ -82,6 +82,7 @@ Target: WCAG 2.2 AA for the shell and primary tool flows.
 - Semantics: labelled fields, `aria-pressed` toggles, `role="alert"` errors, `role="progressbar"` with
   `aria-valuetext`, `aria-live` results.
 - Motion: `prefers-reduced-motion` disables animation and smooth scrolling.
+- Automated gate: axe-core WCAG 2.2 A/AA checks run on the shell, catalogue, help, activity and representative tool pages.
 - Targets: icon-only buttons get ≥36 px hit areas on coarse pointers.
 - Colour: existing palette meets contrast for body text and actions; status is never colour-only.
 - Not yet audited: screen-reader walkthrough of the canvas editors (Edit/Sign). Tracked as follow-up.
