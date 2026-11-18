@@ -87,3 +87,15 @@ console errors: 0
 fonts requested: /fonts/inter-tight-latin-normal.woff2, /fonts/instrument-serif-latin-italic.woff2 (both 200)
 external font origins requested: none
 ```
+
+## Local data (no server copy)
+
+| Data | Where | Contents | Control |
+| --- | --- | --- | --- |
+| Activity history | `localStorage` `paperly.activity.v1` | tool id/name, output filename, size, page count, timestamp | Activity → Clear history |
+| Tool settings | `localStorage` `paperly.prefs.v1.*` | option values only (quality, layout, style), versioned envelope | Activity → Reset settings |
+| Saved signatures | `localStorage` only when the user opts in | up to six signature images | Sign → turn off / Forget signatures |
+| Files and passwords | nowhere | never written to storage, never uploaded | — |
+
+Nothing in local storage is required for the app to work; every entry degrades to a default when
+unavailable, corrupted or cleared.

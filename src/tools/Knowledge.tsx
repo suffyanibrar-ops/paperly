@@ -3,6 +3,7 @@ import {
   Copy,
   Download,
   FileSearch,
+  Info,
   Plus,
   RefreshCw,
   ScanText,
@@ -13,9 +14,11 @@ import {
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   PDFArray,
+  PDFBool,
   PDFDict,
   PDFHexString,
   PDFName,
+  PDFNumber,
   PDFRawStream,
   PDFRef,
   PDFString,
@@ -23,12 +26,14 @@ import {
   type PDFDocument as PDFLibDocument,
   type PDFObject,
 } from "@cantoo/pdf-lib";
-import { extractDocument } from "@/lib/extract";
+import { extractPage } from "@/lib/extract";
 import {
+  STOPWORDS,
   chunkPages,
   extractAnswerWindows,
   highlightRanges,
   rankPassages,
+  tokenize,
   verdict,
   type AnswerWindow,
   type HighlightRange,
@@ -52,8 +57,12 @@ import {
 import { copyText } from "@/lib/router";
 import { friendlyProcessingError, validateUpload } from "@/lib/security";
 import { useInitialFiles, usePdfFile } from "@/lib/usePdf";
-import { Alert, Badge, Button, Field, FileDrop, FileRow, Progress, inputClass } from "@/components/ui";
-import { SinglePdfInput } from "@/components/toolParts";
+import { useDownloadShortcut, usePrimaryShortcut } from "@/lib/hotkeys";
+import { useToolPreferences } from "@/lib/prefs";
+import { SAMPLE } from "@/lib/sample";
+import { Alert, Badge, Button, Field, FileDrop, FileRow, Progress, Segmented, Switch, inputClass } from "@/components/ui";
+import { AdvancedOptions, NumberField, OptionNote, OptionsGrid } from "@/components/AdvancedOptions";
+import { DownloadPanel, SinglePdfInput } from "@/components/toolParts";
 import { cn } from "@/utils/cn";
 
 /* ================================================================== *
@@ -108,8 +117,10 @@ function HighlightedText({ text, ranges }: { text: string; ranges: HighlightRang
 const MAX_DOCS = 5;
 const MAX_TOTAL_PAGES = 400;
 const MAX_CHUNK_CHARS = 720;
+const MAX_CONVERSATION = 12;
+const MAX_ANSWER_SENTENCES = 3;
 
-const SUGGESTED_QUESTIONS = [
+const FALLBACK_SUGGESTIONS = [
   "What is this document about?",
   "What are the main findings?",
   "What dates, amounts or deadlines are mentioned?",
@@ -145,6 +156,20 @@ interface SearchResult {
   windows: AnswerWindow[];
   verdict: Verdict;
   index: KnowledgeIndex;
+}
+
+interface QaEntry {
+  id: string;
+  at: number;
+  result: SearchResult;
+}
+
+/** Thrown between page reads when the visitor cancels the index build. */
+class AskCancelledError extends Error {
+  constructor() {
+    super("Cancelled.");
+    this.name = "AskCancelledError";
+  }
 }
 
 /** Load page counts for each selected PDF, one at a time. */
@@ -253,29 +278,128 @@ function answerAsMarkdown(result: SearchResult): string {
   return lines.join("\n");
 }
 
+/** Shorten a quoted sentence for a citation line. */
+function quoteForCitation(text: string, max = 180): string {
+  const compact = text.replace(/\s+/g, " ").trim();
+  return compact.length > max ? `${compact.slice(0, max - 1).trimEnd()}…` : compact;
+}
+
+/**
+ * Suggest 3–4 questions built from the words that actually repeat in the
+ * indexed passages, so the tool is usable without knowing what to ask.
+ */
+function deriveSuggestions(passages: readonly Passage[], limit = 4): string[] {
+  if (!passages.length) return FALLBACK_SUGGESTIONS.slice(0, limit);
+  const unigrams = new Map<string, number>();
+  const bigrams = new Map<string, number>();
+  for (const passage of passages) {
+    const words = tokenize(passage.text).filter((word) => word.length >= 3 && !/^\d+$/.test(word) && !STOPWORDS.has(word));
+    for (let index = 0; index < words.length; index++) {
+      unigrams.set(words[index], (unigrams.get(words[index]) ?? 0) + 1);
+      if (index + 1 < words.length) {
+        const pair = `${words[index]} ${words[index + 1]}`;
+        bigrams.set(pair, (bigrams.get(pair) ?? 0) + 1);
+      }
+    }
+  }
+  const topBigrams = [...bigrams.entries()]
+    .filter(([, count]) => count >= 2)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 2)
+    .map(([phrase]) => phrase);
+  const topWords = [...unigrams.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 4)
+    .map(([word]) => word);
+  const derived: string[] = [];
+  for (const phrase of topBigrams) derived.push(`What does the document say about “${phrase}”?`);
+  for (const word of topWords) {
+    if (derived.length >= limit) break;
+    if (topBigrams.some((phrase) => phrase.split(" ").includes(word))) continue;
+    derived.push(`Where is “${word}” mentioned?`);
+  }
+  const unique: string[] = [];
+  for (const question of [...derived, ...FALLBACK_SUGGESTIONS]) {
+    if (unique.includes(question)) continue;
+    unique.push(question);
+    if (unique.length >= limit) break;
+  }
+  return unique;
+}
+
+/** Whole conversation as one Markdown document, citations included. */
+function conversationAsMarkdown(entries: readonly QaEntry[]): string {
+  const lines: string[] = [
+    "# Ask your PDF — Q&A export",
+    "",
+    `Exported ${new Date().toISOString().slice(0, 19).replace("T", " ")} UTC · ${entries.length} question${entries.length === 1 ? "" : "s"}`,
+    "",
+  ];
+  entries.forEach((entry, index) => {
+    const { result } = entry;
+    lines.push(`## ${index + 1}. ${result.question}`, "");
+    lines.push(
+      `**Confidence:** ${Math.round(result.verdict.confidence * 100)}% · ${VERDICT_META[result.verdict.status].label}`,
+      "",
+    );
+    if (result.windows.length) {
+      for (const window of result.windows) {
+        lines.push(`> ${window.text}`, `>`, `> — *${window.docName}*, page ${window.page}`, "");
+      }
+    } else {
+      lines.push("_No sentence in the searched text contained enough of the query terms._", "");
+    }
+    lines.push("**Cited pages**", "");
+    for (const window of result.windows) lines.push(`- ${window.docName}, page ${window.page}`);
+    lines.push("");
+  });
+  lines.push(
+    "---",
+    "",
+    "Generated locally by Paperly. Answers are verbatim sentences from your PDFs, ranked by term overlap. Extractive only — no generative AI, no upload and no model calls.",
+  );
+  return lines.join("\n");
+}
+
 export function AskPdfTool() {
   const initial = useInitialFiles().filter((file) => /\.pdf$/i.test(file.name) || file.type === "application/pdf");
   const [files, setFiles] = useState<File[]>(() => initial.slice(0, MAX_DOCS));
   const metas = useFileMetas(files);
+  const opts = useToolPreferences("ask-pdf", {
+    scope: "",
+    answerSentences: MAX_ANSWER_SENTENCES,
+    citations: true,
+    docScope: "all" as "all" | "first",
+  });
 
-  const [scope, setScope] = useState("");
   const [query, setQuery] = useState("");
   const [index, setIndex] = useState<KnowledgeIndex | null>(null);
-  const [result, setResult] = useState<SearchResult | null>(null);
+  const [entries, setEntries] = useState<QaEntry[]>([]);
+  const [activeId, setActiveId] = useState<string | null>(null);
+  const [excludedDocs, setExcludedDocs] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState(0);
   const [stage, setStage] = useState("");
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [copied, setCopied] = useState(false);
+  const [exported, setExported] = useState<{ bytes: Uint8Array; name: string; questions: number } | null>(null);
+  const cancelRef = useRef(false);
+  const querySeq = useRef(0);
+
+  const scope = opts.value.scope;
+  const docScope = opts.value.docScope;
 
   useEffect(() => {
     setIndex(null);
-    setResult(null);
+    setEntries([]);
+    setActiveId(null);
+    setExcludedDocs(new Set());
     setError("");
     setNotice("");
     setProgress(0);
     setStage("");
+    setExported(null);
   }, [files, scope]);
 
   const addFiles = async (picked: File[]) => {
@@ -374,40 +498,44 @@ export function AskPdfTool() {
     let done = 0;
 
     for (const selection of selections) {
+      if (cancelRef.current) throw new AskCancelledError();
       const bytes = await readFileBytes(selection.file);
-      const extracted = await extractDocument(bytes, {
-        pages: selection.pages,
-        onProgress: (pageDone, pageTotal) => {
-          setProgress(((done + pageDone) / totalToRead) * 100);
-          setStage(`${selection.docName} · page ${pageDone} of ${pageTotal}`);
-        },
-      });
+      const document = await openPdfJs(bytes, undefined, { maxPages: MAX_PDF_PAGES });
+      try {
+        const pageTexts: { page: number; text: string; docId: string; docName: string }[] = [];
+        for (const pageNumber of selection.pages) {
+          if (cancelRef.current) throw new AskCancelledError();
+          const page = await extractPage(document, pageNumber);
+          pageTexts.push({ page: page.page, text: page.text, docId: selection.docId, docName: selection.docName });
+          setProgress(((done + pageTexts.length) / totalToRead) * 100);
+          setStage(`${selection.docName} · page ${pageTexts.length} of ${selection.pages.length}`);
+        }
+        const textChars = pageTexts.reduce((sum, page) => sum + page.text.replace(/\s/g, "").length, 0);
+        if (textChars < 20) emptyTextDocs.push(selection.docName);
+        passages.push(...chunkPages(pageTexts, { maxChars: MAX_CHUNK_CHARS }));
+        docs.push({
+          id: selection.docId,
+          name: selection.docName,
+          pageCount: selection.totalPages,
+          pagesRead: selection.pages.length,
+          textChars,
+        });
+      } finally {
+        await document.destroy();
+      }
       done += selection.pages.length;
-      const textChars = extracted.text.replace(/\s/g, "").length;
-      if (textChars < 20) emptyTextDocs.push(selection.docName);
-      passages.push(
-        ...chunkPages(
-          extracted.pages.map((page) => ({
-            page: page.page,
-            text: page.text,
-            docId: selection.docId,
-            docName: selection.docName,
-          })),
-          { maxChars: MAX_CHUNK_CHARS },
-        ),
-      );
-      docs.push({
-        id: selection.docId,
-        name: selection.docName,
-        pageCount: selection.totalPages,
-        pagesRead: selection.pages.length,
-        textChars,
-      });
     }
 
     setStage("Building the local passage index…");
     setProgress(100);
     return { passages, docs, pagesRead: done, requestedPages, capped: requestedPages > done, emptyTextDocs, unreadableFiles };
+  };
+
+  /** Document ids currently inside the search scope. */
+  const scopeIds = (source: KnowledgeIndex): Set<string> => {
+    const docs = source.docs.filter((doc) => !excludedDocs.has(doc.id));
+    const kept = docScope === "first" ? docs.slice(0, 1) : docs;
+    return new Set(kept.map((doc) => doc.id));
   };
 
   const runQuestion = async (override?: string) => {
@@ -416,34 +544,77 @@ export function AskPdfTool() {
       setError("Type a question to search your PDFs.");
       return;
     }
+    if (busy) return;
     if (files.some((file) => !metas[fileKey(file)] || metas[fileKey(file)].loading)) {
       setNotice("Still reading a PDF — try again in a moment.");
       return;
     }
+    const seq = querySeq.current + 1;
+    querySeq.current = seq;
     setBusy(true);
     setError("");
     setNotice("");
-    setResult(null);
+    setExported(null);
+    cancelRef.current = false;
     try {
-      const activeIndex = index ?? (await buildIndex());
-      if (!index) setIndex(activeIndex);
+      let activeIndex = index;
+      if (!activeIndex) {
+        activeIndex = await buildIndex();
+        if (seq !== querySeq.current) return;
+        setIndex(activeIndex);
+      }
       if (!activeIndex.passages.length) {
         setNotice("No text layer was found in the selected pages. This looks like a scanned PDF — run OCR PDF first, then come back with the searchable copy.");
         return;
       }
-      const rank = rankPassages(activeIndex.passages, question, { limit: 6 });
-      const windows = extractAnswerWindows(rank.passages, question, { maxSentences: 3, maxChars: 800 });
+      const included = scopeIds(activeIndex);
+      const passages = activeIndex.passages.filter((passage) => included.has(passage.docId));
+      if (!passages.length) {
+        setNotice("Every document is out of scope. Include at least one PDF to search it.");
+        return;
+      }
+      const scoped: KnowledgeIndex = {
+        ...activeIndex,
+        passages,
+        docs: activeIndex.docs.filter((doc) => included.has(doc.id)),
+      };
+      const rank = rankPassages(scoped.passages, question, { limit: 6 });
+      const windows = extractAnswerWindows(rank.passages, question, {
+        maxSentences: opts.value.answerSentences,
+        maxChars: 800,
+      });
       const outcome = verdict(question, rank);
-      setResult({ question, rank, windows, verdict: outcome, index: activeIndex });
+      const entry: QaEntry = {
+        id: `qa-${seq}-${Date.now()}`,
+        at: Date.now(),
+        result: { question, rank, windows, verdict: outcome, index: scoped },
+      };
+      setEntries((previous) => [...previous, entry].slice(-MAX_CONVERSATION));
+      setActiveId(entry.id);
       if (!rank.passages.length) setNotice("No passage matched those words. Try fewer, more specific terms that appear in the document.");
     } catch (err) {
-      setError((err as Error).message);
+      if (err instanceof AskCancelledError) {
+        setNotice("Cancelled — the index was not finished and no question was searched. Your previous answers are untouched.");
+      } else {
+        setError((err as Error).message);
+      }
     } finally {
-      setBusy(false);
-      setProgress(0);
-      setStage("");
+      if (seq === querySeq.current) {
+        setBusy(false);
+        setProgress(0);
+        setStage("");
+      }
     }
   };
+
+  const cancelBuild = () => {
+    cancelRef.current = true;
+    setStage("Cancelling after this page…");
+  };
+
+  const activeEntry = entries.find((entry) => entry.id === activeId) ?? entries[entries.length - 1] ?? null;
+  const result = activeEntry?.result ?? null;
+  const indexed = result?.index ?? index;
 
   const copyAnswer = async () => {
     if (!result) return;
@@ -458,12 +629,52 @@ export function AskPdfTool() {
     downloadBytes(new Uint8Array(new TextEncoder().encode(answerAsMarkdown(result))), name, "text/markdown");
   };
 
+  const exportConversation = () => {
+    if (!entries.length) return;
+    const markdown = conversationAsMarkdown(entries);
+    setExported({
+      bytes: new Uint8Array(new TextEncoder().encode(markdown)),
+      name: `${sanitizeName(baseName(files[0]?.name ?? "document"))}-qa.md`,
+      questions: entries.length,
+    });
+  };
+
+  const clearConversation = () => {
+    setEntries([]);
+    setActiveId(null);
+    setExported(null);
+    setNotice("Conversation cleared. The passage index is kept, so the next question is answered straight away.");
+  };
+
+  const toggleDoc = (id: string) =>
+    setExcludedDocs((previous) => {
+      const next = new Set(previous);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+
+  const suggestions = useMemo(() => deriveSuggestions(index?.passages ?? []), [index]);
+  const docRows = useMemo(
+    () =>
+      (index?.docs ?? []).map((doc) => ({
+        ...doc,
+        passages: index ? index.passages.filter((passage) => passage.docId === doc.id).length : 0,
+      })),
+    [index],
+  );
+
+  usePrimaryShortcut(
+    () => void runQuestion(),
+    Boolean(files.length) && Boolean(query.trim()) && !busy && !scopeSummary.error,
+  );
+  useDownloadShortcut(downloadAnswer, Boolean(result));
+
   const fileProblems = files
     .map((file) => ({ file, meta: metas[fileKey(file)] }))
     .filter((entry) => entry.meta?.error);
 
   const verdictMeta = result ? VERDICT_META[result.verdict.status] : VERDICT_META["not-found"];
-  const indexed = result?.index ?? index;
 
   return (
     <div className="space-y-5">
@@ -473,6 +684,8 @@ export function AskPdfTool() {
           acceptLabel={`PDF files (up to ${MAX_DOCS})`}
           multiple
           onFiles={(picked) => void addFiles(picked)}
+          sample={SAMPLE.pdf}
+          hint={`Up to ${MAX_DOCS} PDFs · ${MAX_TOTAL_PAGES} pages per run · read in this tab only`}
         />
       ) : (
         <div className="space-y-3">
@@ -571,12 +784,12 @@ export function AskPdfTool() {
                 <input
                   id="ask-pages"
                   value={scope}
-                  onChange={(event) => setScope(event.target.value)}
+                  onChange={(event) => opts.set("scope", event.target.value)}
                   placeholder="All pages"
                   className={inputClass}
                   autoComplete="off"
                 />
-                <Button type="button" variant="outline" size="md" onClick={() => setScope("")} className="shrink-0">
+                <Button type="button" variant="outline" size="md" onClick={() => opts.set("scope", "")} className="shrink-0">
                   All
                 </Button>
               </div>
@@ -584,8 +797,83 @@ export function AskPdfTool() {
           </div>
 
           <div className="flex flex-wrap items-center gap-1.5">
+            <span className="mr-1 text-[10.5px] font-semibold uppercase tracking-[0.08em] text-ink/75">Pages</span>
+            {[
+              { label: "All", value: "" },
+              { label: "Odd", value: "odd" },
+              { label: "Even", value: "even" },
+              { label: "Last", value: "last" },
+              { label: "First 10", value: "1-10" },
+            ].map((chip) => (
+              <button
+                key={chip.label}
+                type="button"
+                aria-pressed={scope.trim() === chip.value}
+                onClick={() => opts.set("scope", chip.value)}
+                className={
+                  scope.trim() === chip.value
+                    ? "rounded-full border border-forest bg-forest px-2.5 py-1 text-[11px] font-medium text-paper"
+                    : "rounded-full border border-line bg-paper px-2.5 py-1 text-[11px] font-medium text-ink/70 transition-colors hover:border-forest/30 hover:text-forest"
+                }
+              >
+                {chip.label}
+              </button>
+            ))}
+          </div>
+
+          <div>
+            <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-[0.08em] text-ink/55">Documents to search</p>
+            <Segmented
+              value={docScope}
+              onChange={(value) => opts.set("docScope", value)}
+              size="sm"
+              options={[
+                { value: "all", label: "Every PDF" },
+                { value: "first", label: "First PDF only" },
+              ]}
+            />
+            <p className="mt-1 text-[11px] leading-relaxed text-muted">
+              {docScope === "all"
+                ? `Questions are answered across all ${files.length} selected PDF${files.length === 1 ? "" : "s"}.`
+                : "Only the first PDF in the list is searched. Use the per-document switches below for finer control."}
+            </p>
+          </div>
+
+          <AdvancedOptions
+            scope="ask-pdf"
+            badge="3 controls"
+            description="Answer length, citations, remembered page range"
+            onReset={opts.reset}
+          >
+            <OptionsGrid>
+              <NumberField
+                label="Sentences per answer"
+                value={opts.value.answerSentences}
+                onChange={(value) => opts.set("answerSentences", value)}
+                min={1}
+                max={MAX_ANSWER_SENTENCES}
+                suffix="sent."
+                hint="Each sentence is copied verbatim from the PDF."
+              />
+              <div className="flex items-end">
+                <Switch
+                  checked={opts.value.citations}
+                  onChange={(value) => opts.set("citations", value)}
+                  label="Show citations"
+                  description="Quote the cited sentence with its page number under every answer."
+                />
+              </div>
+            </OptionsGrid>
+            <div className="mt-3">
+              <OptionNote>
+                Your page range and document scope are remembered between visits. Nothing about the documents themselves is stored.
+              </OptionNote>
+            </div>
+          </AdvancedOptions>
+
+          <div className="flex flex-wrap items-center gap-1.5">
             <span className="mr-1 text-[10.5px] font-semibold uppercase tracking-[0.08em] text-ink/75">Try</span>
-            {SUGGESTED_QUESTIONS.map((question) => (
+            {suggestions.map((question) => (
               <button
                 key={question}
                 type="button"
@@ -600,6 +888,9 @@ export function AskPdfTool() {
               </button>
             ))}
           </div>
+          {index && index.passages.length > 0 && (
+            <p className="-mt-2 text-[10.5px] text-muted">Suggested from the words that repeat in your indexed passages.</p>
+          )}
 
           {scopeSummary.error && <Alert tone="error">{scopeSummary.error}</Alert>}
           {!scopeSummary.error && scopeSummary.total > MAX_TOTAL_PAGES && (
@@ -611,10 +902,50 @@ export function AskPdfTool() {
           {error && <Alert tone="error">{error}</Alert>}
           {notice && <Alert tone="info">{notice}</Alert>}
 
+          {docRows.length > 0 && (
+            <div className="rounded-xl border border-line bg-paper p-3.5">
+              <p className="mb-2 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.09em] text-ink/75">
+                <FileSearch className="h-3.5 w-3.5 text-forest" /> Documents indexed
+              </p>
+              <ul className="space-y-1.5">
+                {docRows.map((doc) => {
+                  const included = docScope === "first" ? docRows[0]?.id === doc.id && !excludedDocs.has(doc.id) : !excludedDocs.has(doc.id);
+                  return (
+                    <li key={doc.id} className="flex items-start gap-2.5">
+                      <input
+                        type="checkbox"
+                        className="mt-0.5 h-4 w-4 shrink-0 accent-forest"
+                        checked={included}
+                        disabled={docScope === "first"}
+                        onChange={() => toggleDoc(doc.id)}
+                        aria-label={`Include ${doc.name} in the search`}
+                      />
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-[12px] font-medium text-ink/80">{doc.name}</span>
+                        <span className="text-[11px] text-muted">
+                          {doc.pagesRead} page{doc.pagesRead === 1 ? "" : "s"} read · {doc.passages} passage{doc.passages === 1 ? "" : "s"}
+                          {doc.textChars < 20 ? " · almost no text layer" : ""}
+                        </span>
+                      </span>
+                    </li>
+                  );
+                })}
+              </ul>
+              <p className="mt-2 text-[10.5px] leading-relaxed text-muted">
+                Unticked documents stay indexed but are left out of the ranking for your next question, so you can compare answers with and without them.
+              </p>
+            </div>
+          )}
+
           <div className="flex flex-wrap items-center gap-2 border-t border-line pt-4">
             <Button onClick={() => void runQuestion()} loading={busy} disabled={!query.trim() || Boolean(scopeSummary.error)}>
               <Search className="h-4 w-4" /> Find answer
             </Button>
+            {busy && (
+              <Button variant="outline" onClick={cancelBuild}>
+                Cancel
+              </Button>
+            )}
             <span className="text-[11.5px] text-muted">Extractive · deterministic · nothing leaves this tab</span>
           </div>
           {busy && <Progress value={progress} label={stage || "Reading your PDFs locally…"} />}
@@ -695,6 +1026,91 @@ export function AskPdfTool() {
             </Alert>
           )}
 
+          {opts.value.citations && result.windows.length > 0 && (
+            <div className="rounded-xl border border-line bg-paper p-3.5">
+              <p className="mb-2 text-[11px] font-semibold uppercase tracking-[0.09em] text-ink/75">Citations</p>
+              <ul className="space-y-2">
+                {result.windows.map((citation, position) => (
+                  <li key={`cite-${citation.docId}-${citation.page}-${citation.start}`} className="flex flex-wrap items-baseline gap-1.5">
+                    <span className="rounded-full bg-forest px-1.5 py-0.5 text-[9.5px] font-bold text-lime">[{position + 1}]</span>
+                    <span className="text-[11.5px] font-semibold text-ink/80">{citation.docName}</span>
+                    <span className="text-[11px] text-muted">page {citation.page}</span>
+                    <span className="w-full text-[11.5px] leading-relaxed text-ink/65">“{quoteForCitation(citation.text)}”</span>
+                  </li>
+                ))}
+              </ul>
+              <p className="mt-2 text-[10.5px] leading-relaxed text-muted">
+                Each citation is the sentence quoted by the answer, with the page it came from. Open that page to read the surrounding context.
+              </p>
+            </div>
+          )}
+
+          {entries.length > 0 && (
+            <div className="rounded-xl border border-line bg-paper p-3.5">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.09em] text-ink/75">
+                  Conversation · {entries.length} question{entries.length === 1 ? "" : "s"}
+                </p>
+                <div className="flex items-center gap-1">
+                  <Button variant="ghost" size="sm" onClick={exportConversation}>
+                    <Download className="h-3.5 w-3.5" /> Export Q&amp;A
+                  </Button>
+                  <Button variant="ghost" size="sm" onClick={clearConversation}>
+                    Clear conversation
+                  </Button>
+                </div>
+              </div>
+              {entries.length > 1 && (
+                <ol className="mt-2 space-y-1">
+                  {[...entries].reverse().map((entry) => {
+                    const active = entry.id === activeEntry?.id;
+                    return (
+                      <li key={entry.id}>
+                        <button
+                          type="button"
+                          onClick={() => setActiveId(entry.id)}
+                          aria-pressed={active}
+                          className={
+                            active
+                              ? "flex w-full items-center justify-between gap-2 rounded-lg border border-forest/25 bg-lime/25 px-2.5 py-1.5 text-left"
+                              : "flex w-full items-center justify-between gap-2 rounded-lg border border-transparent px-2.5 py-1.5 text-left transition-colors hover:border-line hover:bg-bone-deep/40"
+                          }
+                        >
+                          <span className="min-w-0 truncate text-[12px] font-medium text-ink/80">{entry.result.question}</span>
+                          <span className="shrink-0 text-[10.5px] font-semibold tabular-nums text-forest">
+                            {(entry.result.verdict.confidence * 100).toFixed(0)}%
+                          </span>
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ol>
+              )}
+              <p className="mt-2 text-[10.5px] leading-relaxed text-muted">
+                Answers stay in this tab for this visit only. Export writes the questions, the verbatim answers and the cited pages to one Markdown file.
+              </p>
+            </div>
+          )}
+
+          {exported && (
+            <div className="space-y-2">
+              <DownloadPanel
+                bytes={exported.bytes}
+                filename={exported.name}
+                size={exported.bytes.byteLength}
+                mime="text/markdown"
+                title="Q&A export ready"
+                description={`${exported.questions} question${exported.questions === 1 ? "" : "s"} with verbatim answers and citations · Markdown`}
+                onDownload={() => downloadBytes(exported.bytes, exported.name, "text/markdown")}
+              />
+              <div className="flex justify-end">
+                <Button variant="ghost" size="sm" onClick={() => setExported(null)}>
+                  Hide export
+                </Button>
+              </div>
+            </div>
+          )}
+
           {result.rank.passages.length > 0 && (
             <div>
               <p className="mb-2 text-[11px] font-semibold uppercase tracking-[0.1em] text-ink/75">Source passages</p>
@@ -728,7 +1144,6 @@ export function AskPdfTool() {
     </div>
   );
 }
-
 /* ================================================================== *
  * INSPECT PDF — structural forensics with pdf-lib + PDF.js
  * ================================================================== */
@@ -768,6 +1183,49 @@ interface InspectCoverage {
   note: string;
 }
 
+type RiskBand = "low" | "guarded" | "elevated" | "high";
+
+interface RiskReason {
+  id: string;
+  label: string;
+  detail: string;
+  points: number;
+}
+
+interface RiskAssessment {
+  score: number;
+  band: RiskBand;
+  label: string;
+  summary: string;
+  reasons: RiskReason[];
+}
+
+type CheckStatus = "pass" | "warn" | "fail" | "info";
+
+interface CheckRow {
+  id: string;
+  label: string;
+  status: CheckStatus;
+  detail: string;
+}
+
+interface PdfaClaim {
+  claimed: boolean;
+  xmp: boolean;
+  part: string;
+  conformance: string;
+  outputIntent: boolean;
+  note: string;
+  issues: string[];
+}
+
+interface RepairSuggestion {
+  id: string;
+  label: string;
+  detail: string;
+  href?: string;
+}
+
 interface InspectReport {
   file: { name: string; size: number; modified: string };
   generated: string;
@@ -783,6 +1241,10 @@ interface InspectReport {
   sections: ReportSection[];
   flags: RedFlag[];
   text: InspectCoverage;
+  risk: RiskAssessment;
+  accessibility: CheckRow[];
+  pdfa: PdfaClaim;
+  suggestions: RepairSuggestion[];
 }
 
 const SEVERITY_ORDER: Record<Severity, number> = { high: 0, medium: 1, low: 2, info: 3 };
@@ -952,10 +1414,311 @@ function fieldTypeLabel(typeName: string, flags: number): string {
   }
 }
 
+interface InspectScanOptions {
+  /** Read the text layer with PDF.js (slower, but fills the coverage rows). */
+  textScan: boolean;
+  /** Maximum pages sampled for the text-layer check. */
+  textLimit: number;
+}
+
+const DEFAULT_SCAN_OPTIONS: InspectScanOptions = { textScan: true, textLimit: MAX_TEXT_SCAN_PAGES };
+
+/* ------------------------------------------------------------------ *
+ * Risk, accessibility, PDF/A and repair guidance
+ * ------------------------------------------------------------------ */
+const RISK_WEIGHTS: Record<string, number> = {
+  encrypted: 26,
+  parse: 22,
+  javascript: 24,
+  xfa: 10,
+  "no-text": 12,
+  "partial-scan": 5,
+  geometry: 7,
+  xref: 9,
+  attachments: 7,
+  fonts: 4,
+  "open-action": 5,
+  signature: 1,
+};
+
+const RISK_FALLBACK: Record<Severity, number> = { high: 18, medium: 10, low: 4, info: 1 };
+
+const RISK_BANDS: Record<RiskBand, { label: string; summary: string }> = {
+  low: {
+    label: "Low concern",
+    summary: "Nothing unusual surfaced in these checks. That is not a guarantee — still open files from strangers in a viewer you trust.",
+  },
+  guarded: {
+    label: "Worth a look",
+    summary: "A few things are worth reading before you share or open this file more widely.",
+  },
+  elevated: {
+    label: "Treat with care",
+    summary: "Several checks found issues that commonly travel with risky or malformed files. Review the reasons below.",
+  },
+  high: {
+    label: "High concern",
+    summary: "Structural or active-content problems were found. Inspect the reasons before trusting this file or passing it on.",
+  },
+};
+
+/** Deterministic 0–100 concern score from the flags and accessibility gaps. */
+function assessRisk(flags: readonly RedFlag[], accessibility: readonly CheckRow[]): RiskAssessment {
+  const reasons: RiskReason[] = flags
+    .map((flag) => ({
+      id: flag.id,
+      label: flag.label,
+      detail: flag.detail,
+      points: RISK_WEIGHTS[flag.id] ?? RISK_FALLBACK[flag.severity],
+    }))
+    .sort((a, b) => b.points - a.points || a.label.localeCompare(b.label));
+  const accessibilityGaps = accessibility.filter((row) => row.status === "fail").length;
+  const raw = reasons.reduce((sum, reason) => sum + reason.points, 0) + Math.min(12, accessibilityGaps * 3);
+  const score = Math.max(0, Math.min(100, Math.round(raw)));
+  const band: RiskBand = score >= 70 ? "high" : score >= 45 ? "elevated" : score >= 20 ? "guarded" : "low";
+  return {
+    score,
+    band,
+    label: RISK_BANDS[band].label,
+    summary: RISK_BANDS[band].summary,
+    reasons: reasons.slice(0, 3),
+  };
+}
+
+/** Accessibility checks that can be measured without rendering the document. */
+function buildAccessibilityChecks(input: {
+  marked: boolean;
+  hasStructTree: boolean;
+  language: string;
+  title: string;
+  hasOutlines: boolean;
+  outlineCount: number;
+  displayDocTitle: boolean;
+  coverage: InspectCoverage;
+  textScan: boolean;
+  fontResources: number;
+  embeddedFonts: number;
+  uniqueImages: number;
+}): CheckRow[] {
+  const tagged = input.hasStructTree || input.marked;
+  const rows: CheckRow[] = [
+    {
+      id: "tagged",
+      label: "Tagged structure",
+      status: tagged ? "pass" : "fail",
+      detail: tagged
+        ? `A ${input.hasStructTree ? "structure tree" : "/MarkInfo marking"} tells screen readers how the content is organised.`
+        : "No structure tree or /MarkInfo marking was found, so assistive technology sees unstructured text.",
+    },
+    {
+      id: "language",
+      label: "Document language",
+      status: input.language !== "Not set" ? "pass" : "warn",
+      detail:
+        input.language !== "Not set"
+          ? `The catalog declares ${input.language}, so screen readers can pick the right voice.`
+          : "No /Lang entry was found. Screen readers then guess the language, which mispronounces text.",
+    },
+    {
+      id: "title",
+      label: "Document title",
+      status: input.title !== "Not set" ? "pass" : "warn",
+      detail:
+        input.title !== "Not set"
+          ? "A title is set in the Info dictionary, so the viewer can announce it."
+          : "No title was found in the Info dictionary. Viewers then show the file name instead.",
+    },
+    {
+      id: "bookmarks",
+      label: "Bookmarks for navigation",
+      status: input.hasOutlines && input.outlineCount > 0 ? "pass" : "warn",
+      detail:
+        input.hasOutlines && input.outlineCount > 0
+          ? `${input.outlineCount} top-level bookmark${input.outlineCount === 1 ? "" : "s"} let readers jump between sections.`
+          : "No outline was found. Long documents are hard to navigate with a keyboard or screen reader alone.",
+    },
+    {
+      id: "display-title",
+      label: "Title shown in the viewer",
+      status: input.displayDocTitle ? "pass" : "info",
+      detail: input.displayDocTitle
+        ? "ViewerPreferences asks the application to show the document title in its window bar."
+        : "ViewerPreferences does not ask the viewer to show the title. Many viewers fall back to the file name.",
+    },
+    {
+      id: "text",
+      label: "Text for assistive technology",
+      status: !input.textScan
+        ? "info"
+        : input.coverage.sampledPages === 0
+          ? "info"
+          : input.coverage.pagesWithText === input.coverage.sampledPages
+            ? "pass"
+            : input.coverage.pagesWithText === 0
+              ? "fail"
+              : "warn",
+      detail: !input.textScan
+        ? "The text-layer scan was switched off, so this could not be measured."
+        : input.coverage.sampledPages === 0
+          ? "The text layer could not be read."
+          : `${input.coverage.pagesWithText} of ${input.coverage.sampledPages} sampled page${
+              input.coverage.sampledPages === 1 ? "" : "s"
+            } contain selectable text. Pages without text are invisible to search and screen readers.`,
+    },
+    {
+      id: "fonts",
+      label: "Embedded fonts",
+      status: input.fontResources === 0 ? "info" : input.embeddedFonts >= input.fontResources ? "pass" : "warn",
+      detail:
+        input.fontResources === 0
+          ? "No font resources were found on the pages."
+          : input.embeddedFonts >= input.fontResources
+            ? `All ${input.fontResources} font resource${input.fontResources === 1 ? "" : "s"} are embedded.`
+            : `${input.fontResources - input.embeddedFonts} of ${input.fontResources} font resources are not embedded, so text may reflow or drop glyphs.`,
+    },
+  ];
+  if (input.uniqueImages > 0) {
+    rows.push({
+      id: "images",
+      label: "Image descriptions",
+      status: "info",
+      detail: `${input.uniqueImages} image${input.uniqueImages === 1 ? "" : "s"} found. Alt text is stored in the tagged structure, which Paperly does not read here — check it in an accessibility checker.`,
+    });
+  }
+  return rows;
+}
+
+/** Look for a PDF/A claim in the raw XMP packet and the output intents. */
+function buildPdfaClaim(input: {
+  raw: string;
+  outputIntentPdfa: boolean;
+  encrypted: boolean;
+  fontResources: number;
+  embeddedFonts: number;
+  marked: boolean;
+  hasStructTree: boolean;
+}): PdfaClaim {
+  const start = input.raw.indexOf("<x:xmpmeta");
+  const slice = start >= 0 ? input.raw.slice(start, start + 80_000) : "";
+  const partMatch = slice.match(/pdfaid:part\D{0,8}(\d)/);
+  const conformanceMatch = slice.match(/pdfaid:conformance\D{0,8}([A-Za-z])/);
+  const part = partMatch?.[1] ?? "";
+  const conformance = (conformanceMatch?.[1] ?? "").toUpperCase();
+  const claimed = Boolean(part) || input.outputIntentPdfa;
+  const issues: string[] = [];
+  if (claimed && input.encrypted) issues.push("the file is encrypted, which PDF/A forbids");
+  if (claimed && input.fontResources > 0 && input.embeddedFonts < input.fontResources) {
+    issues.push(`${input.fontResources - input.embeddedFonts} font resource(s) are not embedded`);
+  }
+  if (claimed && conformance === "A" && !input.marked && !input.hasStructTree) {
+    issues.push(`the file claims PDF/A-${part || "?"}A conformance but carries no tags`);
+  }
+  const note = claimed
+    ? "A PDF/A claim is a statement written into the file. Paperly reads it but does not validate conformance — use a veraPDF-style validator for that."
+    : slice
+      ? "An XMP packet is present but it makes no PDF/A claim and no GTS_PDFA1 output intent was found."
+      : "No readable XMP packet was found, so there is no PDF/A claim to read. Compressed metadata cannot be checked here.";
+  return {
+    claimed,
+    xmp: Boolean(slice),
+    part: part || "—",
+    conformance: conformance || "—",
+    outputIntent: input.outputIntentPdfa,
+    note,
+    issues,
+  };
+}
+
+/** Plain next-step suggestions derived from the flags that were raised. */
+function buildRepairSuggestions(flags: readonly RedFlag[]): RepairSuggestion[] {
+  const map: Record<string, RepairSuggestion> = {
+    encrypted: {
+      id: "unlock",
+      label: "Unlock the file first",
+      detail: "Most tools need the password removed before they can read the structure reliably.",
+      href: "#/tool/unlock",
+    },
+    parse: {
+      id: "repair",
+      label: "Rebuild the damaged structure",
+      detail: "Repair PDF re-writes the cross-reference table and object graph without re-encoding the pages.",
+      href: "#/tool/repair",
+    },
+    xref: {
+      id: "repair-xref",
+      label: "Re-save with Repair PDF",
+      detail: "A repaired cross-reference table makes the file open reliably in stricter viewers.",
+      href: "#/tool/repair",
+    },
+    javascript: {
+      id: "sanitize-scripts",
+      label: "Remove scripts and actions",
+      detail: "Sanitize PDF deletes open actions, additional actions and document JavaScript in one pass.",
+      href: "#/tool/sanitize",
+    },
+    "open-action": {
+      id: "sanitize-open",
+      label: "Remove the automatic open action",
+      detail: "Sanitize PDF strips /OpenAction so nothing runs or navigates when the file opens.",
+      href: "#/tool/sanitize",
+    },
+    attachments: {
+      id: "sanitize-files",
+      label: "Strip embedded attachments",
+      detail: "Attachments often carry data the author forgot about. Sanitize PDF removes them.",
+      href: "#/tool/sanitize",
+    },
+    xfa: {
+      id: "sanitize-xfa",
+      label: "Flatten or remove the XFA bundle",
+      detail: "Sanitize PDF removes form fields and XFA data, or flatten the form if you need to keep its appearance.",
+      href: "#/tool/sanitize",
+    },
+    "no-text": {
+      id: "ocr",
+      label: "OCR the scanned pages",
+      detail: "OCR PDF adds an invisible text layer so the document becomes searchable, copyable and readable aloud.",
+      href: "#/tool/ocr",
+    },
+    "partial-scan": {
+      id: "ocr-partial",
+      label: "OCR the image-only pages",
+      detail: "Only the pages without text need OCR; the rest keep their existing text layer.",
+      href: "#/tool/ocr",
+    },
+    geometry: {
+      id: "resize",
+      label: "Resize the oversized pages",
+      detail: "Very large page geometry slows viewers and can hit canvas limits. Resize PDF scales them to a print size.",
+      href: "#/tool/resize",
+    },
+    fonts: {
+      id: "embed-fonts",
+      label: "Re-export with fonts embedded",
+      detail: "Print to PDF with ‘embed all fonts’ enabled, or export a PDF/A copy from the authoring application.",
+    },
+    signature: {
+      id: "verify-signature",
+      label: "Verify the signature elsewhere",
+      detail: "Paperly reports signature markers but cannot verify certificates or detect changes made after signing.",
+    },
+  };
+  const seen = new Set<string>();
+  const out: RepairSuggestion[] = [];
+  for (const flag of flags) {
+    const suggestion = map[flag.id];
+    if (!suggestion || seen.has(suggestion.id)) continue;
+    seen.add(suggestion.id);
+    out.push(suggestion);
+  }
+  return out;
+}
+
 async function inspectDocument(
   bytes: ArrayBuffer,
   file: File,
   onProgress: (label: string, value: number) => void,
+  options: InspectScanOptions = DEFAULT_SCAN_OPTIONS,
 ): Promise<InspectReport> {
   const rawBytes = new Uint8Array(bytes);
   const raw = new TextDecoder("latin1").decode(rawBytes);
@@ -1010,6 +1773,14 @@ async function inspectDocument(
   let fontResources = 0;
   let embeddedFonts = 0;
   const fontNames: string[] = [];
+  let marked = false;
+  let hasStructTree = false;
+  let displayDocTitle = false;
+  let outputIntentPdfa = false;
+  const imageStats: {
+    largest: { width: number; height: number; pageWidth: number; page: number } | null;
+    lowResolution: number;
+  } = { largest: null, lowResolution: 0 };
 
   onProgress("Reading metadata and page structure…", 12);
   if (doc) {
@@ -1127,6 +1898,22 @@ async function inspectDocument(
               const subtype = dictionary.lookup(PDFName.of("Subtype"));
               if (!(subtype instanceof PDFName) || subtype.asString() !== "/Image") continue;
               imagePlacements++;
+              const pixelWidth = dictionary.lookup(PDFName.of("Width"));
+              const pixelHeight = dictionary.lookup(PDFName.of("Height"));
+              if (pixelWidth instanceof PDFNumber && pixelHeight instanceof PDFNumber) {
+                const width = pixelWidth.asNumber();
+                const height = pixelHeight.asNumber();
+                let pageWidth = 0;
+                try {
+                  pageWidth = page.getWidth();
+                } catch {
+                  pageWidth = 0;
+                }
+                if (width > 0 && (!imageStats.largest || width > imageStats.largest.width)) {
+                  imageStats.largest = { width, height, pageWidth, page: index + 1 };
+                }
+                if (pageWidth > 0 && width / (pageWidth / 72) < 72) imageStats.lowResolution++;
+              }
               if (!seenImages.has(key)) {
                 seenImages.add(key);
                 uniqueImages++;
@@ -1249,6 +2036,48 @@ async function inspectDocument(
     } catch {
       hasOutlines = false;
     }
+    try {
+      const markInfo = resolveDict(doc.catalog.lookup(PDFName.of("MarkInfo")), context);
+      const markedValue = markInfo ? markInfo.lookup(PDFName.of("Marked")) : undefined;
+      marked =
+        markedValue instanceof PDFBool
+          ? markedValue.asBoolean()
+          : markedValue instanceof PDFName
+            ? markedValue.asString() === "/True"
+            : false;
+    } catch {
+      marked = false;
+    }
+    try {
+      hasStructTree = doc.catalog.has(PDFName.of("StructTreeRoot"));
+    } catch {
+      hasStructTree = false;
+    }
+    try {
+      const viewer = resolveDict(doc.catalog.lookup(PDFName.of("ViewerPreferences")), context);
+      const titleDisplay = viewer ? viewer.lookup(PDFName.of("DisplayDocTitle")) : undefined;
+      displayDocTitle =
+        titleDisplay instanceof PDFBool
+          ? titleDisplay.asBoolean()
+          : titleDisplay instanceof PDFName
+            ? titleDisplay.asString() === "/True"
+            : false;
+    } catch {
+      displayDocTitle = false;
+    }
+    try {
+      const intents = doc.catalog.lookup(PDFName.of("OutputIntents"));
+      if (intents instanceof PDFArray) {
+        const limit = Math.min(intents.size(), 8);
+        for (let intentIndex = 0; intentIndex < limit; intentIndex++) {
+          const intent = intents.lookupMaybe(intentIndex, PDFDict);
+          const subtype = intent?.lookup(PDFName.of("S"));
+          if (subtype instanceof PDFName && subtype.asString() === "/GTS_PDFA1") outputIntentPdfa = true;
+        }
+      }
+    } catch {
+      outputIntentPdfa = false;
+    }
 
     annotationsByType = [...annotationTally.entries()]
       .sort((a, b) => b[1] - a[1])
@@ -1271,11 +2100,16 @@ async function inspectDocument(
     perPage: [],
     note: "",
   };
+  const textScanLimit = Math.max(20, Math.min(2000, Math.round(options.textLimit) || MAX_TEXT_SCAN_PAGES));
+  if (!options.textScan) {
+    coverage.note = "The text-layer scan is switched off in Advanced options, so coverage was not measured.";
+  }
   try {
+    if (options.textScan) {
     const jsDoc = await openPdfJs(bytes);
     const total = jsDoc.numPages;
     if (!pageCount) pageCount = total;
-    const sampled = Math.min(total, MAX_TEXT_SCAN_PAGES);
+    const sampled = Math.min(total, textScanLimit);
     const perPage: { page: number; chars: number }[] = [];
     const emptyPages: number[] = [];
     let charsTotal = 0;
@@ -1312,6 +2146,7 @@ async function inspectDocument(
     coverage.averageCharsPerPage = sampled ? charsTotal / sampled : 0;
     coverage.perPage = perPage;
     coverage.note = sampled === total ? "" : `Sampled the first ${sampled} of ${total} pages to keep inspection fast.`;
+    }
   } catch (err) {
     coverage.note = `Text layer unavailable: ${readablePdfError(err)}`;
   }
@@ -1425,6 +2260,32 @@ async function inspectDocument(
     });
   }
   flags.sort((a, b) => SEVERITY_ORDER[a.severity] - SEVERITY_ORDER[b.severity] || a.label.localeCompare(b.label));
+
+  const accessibility = buildAccessibilityChecks({
+    marked,
+    hasStructTree,
+    language,
+    title,
+    hasOutlines,
+    outlineCount,
+    displayDocTitle,
+    coverage,
+    textScan: options.textScan,
+    fontResources,
+    embeddedFonts,
+    uniqueImages,
+  });
+  const pdfa = buildPdfaClaim({
+    raw,
+    outputIntentPdfa,
+    encrypted: encryptedByRaw,
+    fontResources,
+    embeddedFonts,
+    marked,
+    hasStructTree,
+  });
+  const risk = assessRisk(flags, accessibility);
+  const suggestions = buildRepairSuggestions(flags);
 
   const metadataRows: ReportRow[] = [
     { label: "Title", value: title },
@@ -1564,6 +2425,20 @@ async function inspectDocument(
           severity: fontResources && embeddedFonts < fontResources ? "low" : undefined,
         },
         { label: "Font names", value: fontNames.length ? `${fontNames.slice(0, 8).join(", ")}${fontNames.length > 8 ? " …" : ""}` : "—" },
+        {
+          label: "Image resolution",
+          value: imageStats.largest
+            ? `${imageStats.largest.width}×${imageStats.largest.height} px largest · ${
+                imageStats.largest.pageWidth > 0
+                  ? `≈${Math.round(imageStats.largest.width / (imageStats.largest.pageWidth / 72))} DPI`
+                  : "DPI unknown"
+              } if it fills page ${imageStats.largest.page}${
+                imageStats.lowResolution
+                  ? ` · ${imageStats.lowResolution} placement${imageStats.lowResolution === 1 ? "" : "s"} below 72 DPI`
+                  : ""
+              }`
+            : "No image pixels found",
+        },
       ],
     },
   ];
@@ -1585,6 +2460,10 @@ async function inspectDocument(
     sections: sectionRows,
     flags,
     text: coverage,
+    risk,
+    accessibility,
+    pdfa,
+    suggestions,
   };
 }
 
@@ -1593,6 +2472,9 @@ function reportToText(report: InspectReport): string {
     `Paperly PDF inspection — ${report.file.name}`,
     `Generated: ${report.generated}`,
     `File size: ${formatBytes(report.file.size)} · modified ${report.file.modified}`,
+    "",
+    `Risk score: ${report.risk.score}/100 — ${report.risk.label}`,
+    ...report.risk.reasons.map((reason, index) => `  ${index + 1}. ${reason.label} (+${reason.points})`),
     "",
     `PDF ${report.summary.version} · ${report.summary.pages} page${report.summary.pages === 1 ? "" : "s"} · ${
       report.summary.encrypted ? "encrypted" : "not encrypted"
@@ -1607,9 +2489,90 @@ function reportToText(report: InspectReport): string {
   lines.push("RED FLAGS");
   if (!report.flags.length) lines.push("  None detected by the in-browser checks.");
   else for (const flag of report.flags) lines.push(`  [${flag.severity.toUpperCase()}] ${flag.label} — ${flag.detail}`);
+  lines.push("", "ACCESSIBILITY");
+  for (const row of report.accessibility) lines.push(`  [${row.status.toUpperCase()}] ${row.label} — ${row.detail}`);
+  lines.push("", "PDF/A & ARCHIVAL");
+  lines.push(
+    `  Claim: ${report.pdfa.claimed ? `PDF/A-${report.pdfa.part} (${report.pdfa.conformance})` : "none found"} · output intent: ${
+      report.pdfa.outputIntent ? "GTS_PDFA1" : "none"
+    }`,
+  );
+  if (report.pdfa.issues.length) for (const issue of report.pdfa.issues) lines.push(`  Issue: ${issue}`);
+  lines.push(`  ${report.pdfa.note}`);
+  lines.push("", "SUGGESTED NEXT STEPS");
+  if (!report.suggestions.length) lines.push("  Nothing to repair — no corrective action was suggested by these checks.");
+  else for (const suggestion of report.suggestions) lines.push(`  - ${suggestion.label} (${suggestion.href ?? "no tool"}): ${suggestion.detail}`);
   lines.push(
     "",
-    "Inspection ran entirely in this tab. Checks are heuristic: an absent flag is not proof the file is safe, signatures are not verified, and metadata can be forged.",
+    "Inspection ran entirely in this tab. Checks are heuristic: an absent flag is not proof the file is safe, the risk score is a weighted summary of those checks rather than a verdict, signatures are not verified, PDF/A conformance is not validated, and metadata can be forged.",
+  );
+  return lines.join("\n");
+}
+
+/** Short copy-summary: the score, the band and the top reasons. */
+function reportRiskSummary(report: InspectReport): string {
+  const lines = [
+    `${report.file.name} — risk ${report.risk.score}/100 (${report.risk.label})`,
+    report.risk.summary,
+    "",
+  ];
+  if (report.risk.reasons.length) {
+    lines.push("Top reasons:");
+    report.risk.reasons.forEach((reason, index) => lines.push(`${index + 1}. ${reason.label} (+${reason.points}) — ${reason.detail}`));
+  } else {
+    lines.push("No red flags contributed to the score.");
+  }
+  const gaps = report.accessibility.filter((row) => row.status === "fail" || row.status === "warn");
+  if (gaps.length) {
+    lines.push("", `Accessibility gaps: ${gaps.map((row) => row.label).join(", ")}`);
+  }
+  if (report.suggestions.length) {
+    lines.push("", `Next steps: ${report.suggestions.map((suggestion) => suggestion.label).join("; ")}`);
+  }
+  lines.push("", "Heuristic in-browser checks, not a security guarantee or a certificate verification.");
+  return lines.join("\n");
+}
+
+function reportToMarkdown(report: InspectReport): string {
+  const lines: string[] = [
+    `# Inspection — ${report.file.name}`,
+    "",
+    `Generated ${report.generated} · ${formatBytes(report.file.size)} · modified ${report.file.modified}`,
+    "",
+    `## Risk score: ${report.risk.score}/100 — ${report.risk.label}`,
+    "",
+    report.risk.summary,
+    "",
+  ];
+  if (report.risk.reasons.length) {
+    lines.push("**Top reasons**", "");
+    report.risk.reasons.forEach((reason, index) => lines.push(`${index + 1}. **${reason.label}** (+${reason.points}) — ${reason.detail}`));
+    lines.push("");
+  }
+  lines.push("## Structural red flags", "");
+  if (!report.flags.length) lines.push("_No structural red flags were detected by these checks._");
+  else for (const flag of report.flags) lines.push(`- \`${flag.severity.toUpperCase()}\` **${flag.label}** — ${flag.detail}`);
+  lines.push("", "## Accessibility", "");
+  for (const row of report.accessibility) {
+    lines.push(`- **${row.label}** (${row.status}) — ${row.detail}`);
+  }
+  lines.push("", "## PDF/A and archival", "");
+  lines.push(`- Claim: ${report.pdfa.claimed ? `PDF/A-${report.pdfa.part} (${report.pdfa.conformance})` : "none found"}`);
+  lines.push(`- Output intent: ${report.pdfa.outputIntent ? "GTS_PDFA1 present" : "none"}`);
+  lines.push(`- Consistency: ${report.pdfa.issues.length ? report.pdfa.issues.join("; ") : "no contradictions detected"}`);
+  lines.push(`- ${report.pdfa.note}`);
+  for (const section of report.sections) {
+    lines.push("", `## ${section.title}`, "");
+    for (const row of section.rows) lines.push(`- **${row.label}:** ${row.value}`);
+  }
+  lines.push("", "## Suggested next steps", "");
+  if (!report.suggestions.length) lines.push("_Nothing to repair._");
+  else for (const suggestion of report.suggestions) lines.push(`- **${suggestion.label}** — ${suggestion.detail}`);
+  lines.push(
+    "",
+    "---",
+    "",
+    "Generated locally by Paperly. Every check ran in this tab: no upload, no network call and no model. The checks are heuristic — an absent flag is not proof the file is safe, the risk score summarises those checks rather than certifying the file, signatures are not verified and PDF/A conformance is not validated.",
   );
   return lines.join("\n");
 }
@@ -1617,13 +2580,24 @@ function reportToText(report: InspectReport): string {
 export function InspectPdfTool() {
   const initial = useInitialFiles();
   const pdf = usePdfFile(initial);
+  const opts = useToolPreferences("inspect-pdf", {
+    textScan: true,
+    textLimit: MAX_TEXT_SCAN_PAGES,
+    suggestions: true,
+  });
   const [report, setReport] = useState<InspectReport | null>(null);
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState(0);
   const [stage, setStage] = useState("");
   const [error, setError] = useState("");
   const [copied, setCopied] = useState(false);
+  const [copiedSummary, setCopiedSummary] = useState(false);
+  const [markdown, setMarkdown] = useState<{ bytes: Uint8Array; name: string } | null>(null);
   const [nonce, setNonce] = useState(0);
+
+  const textScan = opts.value.textScan;
+  const textLimit = opts.value.textLimit;
+  const showSuggestions = opts.value.suggestions;
 
   useEffect(() => {
     if (!pdf.bytes || !pdf.file) {
@@ -1638,15 +2612,21 @@ export function InspectPdfTool() {
     setBusy(true);
     setError("");
     setReport(null);
+    setMarkdown(null);
     setProgress(0);
     setStage("Reading document structure…");
     void (async () => {
       try {
-        const next = await inspectDocument(bytes, file, (label, value) => {
-          if (!alive) return;
-          setStage(label);
-          setProgress(value);
-        });
+        const next = await inspectDocument(
+          bytes,
+          file,
+          (label, value) => {
+            if (!alive) return;
+            setStage(label);
+            setProgress(value);
+          },
+          { textScan, textLimit },
+        );
         if (alive) setReport(next);
       } catch (err) {
         if (alive) setError(friendlyProcessingError(err, "This PDF couldn’t be inspected."));
@@ -1661,7 +2641,7 @@ export function InspectPdfTool() {
     return () => {
       alive = false;
     };
-  }, [pdf.bytes, pdf.file, nonce]);
+  }, [pdf.bytes, pdf.file, nonce, textScan, textLimit]);
 
   const copyReport = async () => {
     if (!report) return;
@@ -1670,14 +2650,38 @@ export function InspectPdfTool() {
     window.setTimeout(() => setCopied(false), 1600);
   };
 
+  const copySummary = async () => {
+    if (!report) return;
+    const ok = await copyText(reportRiskSummary(report));
+    setCopiedSummary(ok);
+    window.setTimeout(() => setCopiedSummary(false), 1600);
+  };
+
   const downloadJson = () => {
     if (!report) return;
     const name = `${sanitizeName(baseName(report.file.name))}-inspection.json`;
     downloadBytes(new Uint8Array(new TextEncoder().encode(JSON.stringify(report, null, 2))), name, "application/json");
   };
 
+  const buildMarkdownReport = () => {
+    if (!report) return;
+    setMarkdown({
+      bytes: new Uint8Array(new TextEncoder().encode(reportToMarkdown(report))),
+      name: `${sanitizeName(baseName(report.file.name))}-inspection.md`,
+    });
+  };
+
+  usePrimaryShortcut(() => setNonce((value) => value + 1), Boolean(pdf.bytes) && !busy);
+  useDownloadShortcut(buildMarkdownReport, Boolean(report));
+
   const highFlags = report?.flags.filter((flag) => flag.severity === "high" || flag.severity === "medium").length ?? 0;
   const textPercent = report && report.text.sampledPages ? Math.round((report.text.pagesWithText / report.text.sampledPages) * 100) : 0;
+  const riskTone: Record<RiskBand, { surface: string; text: string; bar: string }> = {
+    low: { surface: "border-forest/25 bg-forest/[0.05]", text: "text-forest", bar: "bg-forest" },
+    guarded: { surface: "border-line bg-bone-deep/30", text: "text-ink/80", bar: "bg-ink/50" },
+    elevated: { surface: "border-amber-500/30 bg-amber-50/70", text: "text-amber-900", bar: "bg-amber-500" },
+    high: { surface: "border-clay/30 bg-clay/[0.06]", text: "text-clay-ink", bar: "bg-clay" },
+  };
 
   return (
     <div className="space-y-5">
@@ -1698,6 +2702,49 @@ export function InspectPdfTool() {
       {busy && <Progress value={progress} label={stage || "Inspecting this PDF locally…"} />}
       {error && <Alert tone="error" title="Inspection failed">{error}</Alert>}
 
+      {pdf.bytes && !pdf.error && (
+        <AdvancedOptions
+          scope="inspect-pdf"
+          badge="3 controls"
+          description="Text-layer sampling depth, repair suggestions"
+          onReset={opts.reset}
+        >
+          <OptionsGrid>
+            <div className="flex items-end">
+              <Switch
+                checked={textScan}
+                onChange={(value) => opts.set("textScan", value)}
+                label="Measure the text layer"
+                description="Turn off for a faster read of structure only — the coverage rows stay empty."
+              />
+            </div>
+            <NumberField
+              label="Pages sampled for text"
+              value={textLimit}
+              onChange={(value) => opts.set("textLimit", value)}
+              min={20}
+              max={2000}
+              step={20}
+              suffix="pages"
+              hint="Inspection stops sampling after this many pages."
+            />
+            <div className="flex items-end">
+              <Switch
+                checked={showSuggestions}
+                onChange={(value) => opts.set("suggestions", value)}
+                label="Show repair suggestions"
+                description="Turn the detected flags into plain next steps with links to the right tool."
+              />
+            </div>
+          </OptionsGrid>
+          <div className="mt-3">
+            <OptionNote>
+              Everything here runs in this tab. Raising the sample limit inspects more pages but takes proportionally longer.
+            </OptionNote>
+          </div>
+        </AdvancedOptions>
+      )}
+
       {report && (
         <div className="space-y-4">
           <div>
@@ -1716,6 +2763,49 @@ export function InspectPdfTool() {
               {report.file.name} · {formatBytes(report.file.size)} · inspected {new Date(report.generated).toLocaleString()}
             </p>
           </div>
+
+          <section className={cn("rounded-2xl border p-4", riskTone[report.risk.band].surface)}>
+            <div className="flex flex-wrap items-end justify-between gap-3">
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-ink/60">Risk score</p>
+                <p className="mt-1 flex items-baseline gap-2">
+                  <span className={cn("text-[30px] font-semibold leading-none tabular-nums", riskTone[report.risk.band].text)}>
+                    {report.risk.score}
+                  </span>
+                  <span className="text-[12px] font-medium text-muted">/ 100</span>
+                  <span className={cn("rounded-full border border-current/20 px-2 py-0.5 text-[10.5px] font-bold uppercase tracking-[0.08em]", riskTone[report.risk.band].text)}>
+                    {report.risk.label}
+                  </span>
+                </p>
+              </div>
+              <p className="max-w-md text-[11.5px] leading-relaxed text-ink/70">{report.risk.summary}</p>
+            </div>
+            <div className="mt-3 h-2 overflow-hidden rounded-full bg-ink/10">
+              <div
+                className={cn("h-full rounded-full transition-all", riskTone[report.risk.band].bar)}
+                style={{ width: `${Math.max(3, report.risk.score)}%` }}
+              />
+            </div>
+            {report.risk.reasons.length > 0 && (
+              <ol className="mt-3 space-y-1">
+                {report.risk.reasons.map((reason, position) => (
+                  <li key={reason.id} className="flex items-start gap-2 text-[11.5px] leading-relaxed text-ink/75">
+                    <span className="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-ink/10 text-[9px] font-bold text-ink/70">
+                      {position + 1}
+                    </span>
+                    <span className="min-w-0">
+                      <span className="font-semibold text-ink/85">{reason.label}</span>
+                      <span className="ml-1.5 text-[10.5px] font-semibold tabular-nums text-muted">+{reason.points}</span>
+                      <span className="block text-[10.5px] text-ink/60">{reason.detail}</span>
+                    </span>
+                  </li>
+                ))}
+              </ol>
+            )}
+            <p className="mt-2.5 text-[10.5px] leading-relaxed text-muted">
+              The score is a weighted sum of the checks on this page — not a verdict and not a malware scan.
+            </p>
+          </section>
 
           <section className="rounded-2xl border border-line bg-paper p-4">
             <div className="flex flex-wrap items-center justify-between gap-2">
@@ -1770,20 +2860,137 @@ export function InspectPdfTool() {
             ))}
           </div>
 
+          <section className="rounded-xl border border-line bg-paper p-3.5">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.1em] text-ink/75">
+                <ShieldCheck className="h-3.5 w-3.5 text-forest" /> Accessibility checks
+              </p>
+              <span className="text-[10.5px] font-medium text-muted">
+                {report.accessibility.filter((row) => row.status === "pass").length} of {report.accessibility.length} pass
+              </span>
+            </div>
+            <ul className="mt-2 space-y-1.5">
+              {report.accessibility.map((row) => (
+                <li key={row.id} className="flex items-start gap-2 rounded-lg border border-line/70 px-2.5 py-2">
+                  <span
+                    className={cn(
+                      "mt-0.5 shrink-0 rounded-full border px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-[0.06em]",
+                      row.status === "pass"
+                        ? "border-forest/25 bg-forest/[0.07] text-forest"
+                        : row.status === "fail"
+                          ? "border-clay/30 bg-clay/[0.08] text-clay-ink"
+                          : row.status === "warn"
+                            ? "border-amber-500/30 bg-amber-50 text-amber-900"
+                            : "border-line bg-bone-deep/40 text-ink/60",
+                    )}
+                  >
+                    {row.status === "pass" ? "pass" : row.status === "fail" ? "gap" : row.status === "warn" ? "check" : "info"}
+                  </span>
+                  <span className="min-w-0">
+                    <span className="block text-[11.5px] font-semibold text-ink/85">{row.label}</span>
+                    <span className="block text-[10.5px] leading-relaxed text-ink/60">{row.detail}</span>
+                  </span>
+                </li>
+              ))}
+            </ul>
+            <p className="mt-2 text-[10.5px] leading-relaxed text-muted">
+              These are structural checks only. Reading order, contrast and alternative text live inside the tagged content and need a dedicated
+              accessibility checker.
+            </p>
+          </section>
+
+          <section className="rounded-xl border border-line bg-paper p-3.5">
+            <p className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.1em] text-ink/75">
+              <Info className="h-3.5 w-3.5 text-forest" /> PDF/A &amp; archival claim
+            </p>
+            <p className="mt-2 text-[12px] leading-relaxed text-ink/80">
+              {report.pdfa.claimed ? (
+                <>
+                  This file claims <strong>PDF/A-{report.pdfa.part}</strong>
+                  {report.pdfa.conformance !== "—" ? ` with ${report.pdfa.conformance} conformance` : ""}
+                  {report.pdfa.outputIntent ? " and carries a GTS_PDFA1 output intent." : "."}
+                </>
+              ) : (
+                "The readable metadata makes no PDF/A claim and no output intent names a PDF/A profile."
+              )}
+            </p>
+            {report.pdfa.issues.length > 0 && (
+              <ul className="mt-1.5 space-y-0.5">
+                {report.pdfa.issues.map((issue) => (
+                  <li key={issue} className="text-[11px] leading-relaxed text-amber-900">
+                    · {issue}
+                  </li>
+                ))}
+              </ul>
+            )}
+            <p className="mt-1.5 text-[10.5px] leading-relaxed text-muted">{report.pdfa.note}</p>
+          </section>
+
+          {showSuggestions && (
+            <section className="rounded-xl border border-forest/15 bg-lime/15 p-3.5">
+              <p className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.1em] text-forest">Repair suggestions</p>
+              {report.suggestions.length ? (
+                <ul className="mt-2 space-y-2">
+                  {report.suggestions.map((suggestion) => (
+                    <li key={suggestion.id} className="text-[11.5px] leading-relaxed text-ink/75">
+                      {suggestion.href ? (
+                        <a href={suggestion.href} className="font-semibold text-forest underline">
+                          {suggestion.label}
+                        </a>
+                      ) : (
+                        <span className="font-semibold text-ink/85">{suggestion.label}</span>
+                      )}
+                      <span className="block text-[10.5px] text-ink/60">{suggestion.detail}</span>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="mt-1.5 text-[11.5px] leading-relaxed text-forest">
+                  No corrective action was suggested by these checks — the structure looks ordinary.
+                </p>
+              )}
+            </section>
+          )}
+
           {report.summary.parseError && <Alert tone="warning" title="Structure could not be fully parsed">{report.summary.parseError}</Alert>}
 
           <div className="flex flex-wrap items-center gap-2 border-t border-line pt-4">
             <Button variant="outline" onClick={() => void copyReport()}>
               {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />} {copied ? "Copied" : "Copy full report"}
             </Button>
+            <Button variant="outline" onClick={() => void copySummary()}>
+              {copiedSummary ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />} {copiedSummary ? "Copied" : "Copy summary"}
+            </Button>
             <Button variant="outline" onClick={downloadJson}>
               <Download className="h-4 w-4" /> JSON report
+            </Button>
+            <Button variant="outline" onClick={buildMarkdownReport}>
+              <Download className="h-4 w-4" /> Markdown report
             </Button>
             <Button variant="ghost" onClick={() => setNonce((value) => value + 1)}>
               <RefreshCw className="h-4 w-4" /> Re-inspect
             </Button>
             <span className="text-[11px] text-muted">Inspected in this tab · nothing was uploaded</span>
           </div>
+
+          {markdown && (
+            <div className="space-y-2">
+              <DownloadPanel
+                bytes={markdown.bytes}
+                filename={markdown.name}
+                size={markdown.bytes.byteLength}
+                mime="text/markdown"
+                title="Markdown report ready"
+                description="Risk score, red flags, accessibility, PDF/A claim, every section and the suggested next steps in one file."
+                onDownload={() => downloadBytes(markdown.bytes, markdown.name, "text/markdown")}
+              />
+              <div className="flex justify-end">
+                <Button variant="ghost" size="sm" onClick={() => setMarkdown(null)}>
+                  Hide report panel
+                </Button>
+              </div>
+            </div>
+          )}
         </div>
       )}
 

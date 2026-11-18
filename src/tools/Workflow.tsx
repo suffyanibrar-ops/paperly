@@ -1,18 +1,26 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   ArrowDown,
   ArrowUp,
   Combine,
+  Copy,
+  Download,
   FileOutput,
+  GripVertical,
   Hash,
+  Layers,
   LockKeyhole,
+  Play,
   Plus,
   RotateCw,
   Scissors,
+  ShieldCheck,
   Trash2,
+  Upload,
   Workflow as WorkflowIcon,
   X,
 } from "lucide-react";
+import { PDFName } from "@cantoo/pdf-lib";
 import {
   PDFDocument,
   baseName,
@@ -28,27 +36,21 @@ import {
   sanitizeName,
   zipAndDownload,
 } from "@/lib/pdf";
-import { recompressImages } from "@/tools/Optimize";
+import { flattenPdf, recompressImages } from "@/tools/Optimize";
 import { useInitialFiles } from "@/lib/usePdf";
-import {
-  Alert,
-  Badge,
-  Button,
-  Field,
-  FileDrop,
-  FileRow,
-  Progress,
-  Segmented,
-  Select,
-  Switch,
-  TextInput,
-} from "@/components/ui";
+import { Alert, Badge, Button, Field, FileDrop, FileRow, Progress, Segmented, Select, Switch, TextInput } from "@/components/ui";
 import { DownloadPanel } from "@/components/toolParts";
+import { friendlyProcessingError } from "@/lib/security";
+import { SAMPLE } from "@/lib/sample";
+import { useToolPreferences } from "@/lib/prefs";
+import { JobCancelledError, describeJobTime, useJob } from "@/lib/job";
+import { useDownloadShortcut, usePrimaryShortcut } from "@/lib/hotkeys";
+import { downloadOutput } from "@/lib/output";
 
 /* ================================================================== *
  * PDF WORKFLOW — chain several operations over one or many PDFs
  * ================================================================== */
-type StepKind = "rotate" | "remove" | "extract" | "watermark" | "numbers" | "compress";
+type StepKind = "rotate" | "remove" | "extract" | "watermark" | "numbers" | "compress" | "flatten" | "sanitize";
 type Level = "light" | "balanced" | "strong";
 
 interface Step {
@@ -62,10 +64,18 @@ interface Step {
   position: "bottom" | "top";
   start: number;
   level: Level;
+  /** JPEG quality used by the flatten step (0.4–0.95). */
+  quality: number;
+  /** Sanitise: remove document metadata / XMP. */
+  stripMeta: boolean;
+  /** Sanitise: remove open actions, scripts and form definitions. */
+  stripActions: boolean;
+  /** Sanitise: remove page annotations and comments. */
+  stripAnnots: boolean;
 }
 
 const MAX_FILES = 20;
-const MAX_STEPS = 8;
+const MAX_STEPS = 10;
 
 const COMPRESSION_LEVELS: Record<Level, { quality: number; maxDimension: number; label: string }> = {
   light: { quality: 0.82, maxDimension: 2600, label: "Light" },
@@ -79,8 +89,12 @@ const STEP_META: Record<StepKind, { label: string; icon: typeof RotateCw; hint: 
   extract: { label: "Extract pages", icon: Scissors, hint: "Keep only the ranges you choose." },
   watermark: { label: "Add watermark", icon: WorkflowIcon, hint: "Stamp diagonal text across every page." },
   numbers: { label: "Page numbers", icon: Hash, hint: "Number the kept pages automatically." },
-  compress: { label: "Compress", icon: FileOutput, hint: "Re-encode photos after the structural work." },
+  flatten: { label: "Flatten to images", icon: Layers, hint: "Rasterise each page, so nothing hidden survives." },
+  sanitize: { label: "Sanitise", icon: ShieldCheck, hint: "Strip metadata, scripts and annotations." },
+  compress: { label: "Compress", icon: FileOutput, hint: "Re-encode images after the structural work." },
 };
+
+const STEP_ORDER: StepKind[] = ["rotate", "remove", "extract", "watermark", "numbers", "flatten", "sanitize", "compress"];
 
 function uid() {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
@@ -98,6 +112,10 @@ function newStep(kind: StepKind): Step {
     position: "bottom",
     start: 1,
     level: "balanced",
+    quality: 0.72,
+    stripMeta: true,
+    stripActions: true,
+    stripAnnots: false,
   };
 }
 
@@ -105,6 +123,31 @@ const hasTextStep = (steps: Step[]) => steps.some((step) => step.kind === "water
 
 function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
   return bytes.slice().buffer as ArrayBuffer;
+}
+
+function describeStep(step: Step): string {
+  switch (step.kind) {
+    case "rotate":
+      return `${step.angle}° ${step.angle === 180 ? "turn" : "rotation"}`;
+    case "remove":
+      return step.range.trim() ? `Remove ${step.range.trim()}` : "No range set — nothing removed";
+    case "extract":
+      return step.range.trim() ? `Keep ${step.range.trim()}` : "No range set — every page kept";
+    case "watermark":
+      return step.text.trim() ? `“${step.text.trim()}” at ${Math.round(step.opacity * 100)}%` : "No text set";
+    case "numbers":
+      return `Starts at ${step.start} · ${step.position === "top" ? "top" : "bottom"}`;
+    case "compress":
+      return `${COMPRESSION_LEVELS[step.level].label} image re-encoding`;
+    case "flatten":
+      return `${Math.round(step.quality * 100)}% JPEG, 1600 px wide`;
+    case "sanitize":
+      return (
+        [step.stripMeta ? "metadata" : "", step.stripActions ? "actions and scripts" : "", step.stripAnnots ? "annotations" : ""]
+          .filter(Boolean)
+          .join(" · ") || "Nothing selected"
+      );
+  }
 }
 
 async function drawOverlays(doc: PDFDocument, steps: Step[]) {
@@ -145,18 +188,73 @@ async function drawOverlays(doc: PDFDocument, steps: Step[]) {
   });
 }
 
+/** Strip metadata, scripts and annotations according to the step settings. */
+async function sanitizeOutput(bytes: Uint8Array, step: Step): Promise<Uint8Array> {
+  const doc = await openPdfLib(bytes);
+  const catalog = doc.catalog;
+  if (step.stripMeta) {
+    for (const key of ["Metadata", "PieceInfo", "MarkInfo", "StructTreeRoot"]) {
+      try {
+        catalog.delete(PDFName.of(key));
+      } catch {
+        /* unusual catalog entries are ignored */
+      }
+    }
+    try {
+      doc.setTitle("");
+      doc.setAuthor("");
+      doc.setSubject("");
+      doc.setKeywords([]);
+    } catch {
+      /* the information dictionary is optional */
+    }
+  }
+  if (step.stripActions) {
+    for (const key of ["OpenAction", "AA", "Names", "Perms", "AcroForm"]) {
+      try {
+        catalog.delete(PDFName.of(key));
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+  if (step.stripAnnots) {
+    for (const page of doc.getPages()) {
+      try {
+        page.node.delete(PDFName.of("Annots"));
+      } catch {
+        /* a page without annotations needs no change */
+      }
+    }
+  }
+  try {
+    doc.setProducer("Paperly · sanitised copy");
+    doc.setCreator("Paperly");
+  } catch {
+    /* ignore */
+  }
+  return doc.save({ useObjectStreams: true });
+}
+
 /** Apply the pipeline to one PDF and return the new bytes. */
 async function runPipeline(
   bytes: ArrayBuffer,
   steps: Step[],
   onPhase: (label: string, value: number) => void,
+  isCancelled: () => boolean,
 ): Promise<Uint8Array> {
+  const check = () => {
+    if (isCancelled()) throw new JobCancelledError();
+  };
   const structural = steps.filter((step) => step.kind === "rotate" || step.kind === "remove" || step.kind === "extract");
   const compress = [...steps].reverse().find((step) => step.kind === "compress");
+  const flatten = [...steps].reverse().find((step) => step.kind === "flatten");
+  const sanitize = [...steps].reverse().find((step) => step.kind === "sanitize");
   let out: Uint8Array;
 
   if (structural.length || hasTextStep(steps)) {
-    onPhase("Rebuilding the document structure…", 30);
+    onPhase("Rebuilding the document structure…", 20);
+    check();
     const source = await openPdfLib(bytes);
     const total = source.getPageCount();
     if (total > 1000) throw new Error("This workflow supports PDFs up to 1,000 pages per file. Split the file first.");
@@ -179,7 +277,8 @@ async function runPipeline(
       target.addPage(page);
     });
     await drawOverlays(target, steps);
-    onPhase("Saving the rebuilt PDF…", 55);
+    check();
+    onPhase("Saving the rebuilt PDF…", 46);
     out = await target.save({ useObjectStreams: true });
   } else {
     const doc = await openPdfLib(bytes);
@@ -187,31 +286,123 @@ async function runPipeline(
     out = await doc.save({ useObjectStreams: true });
   }
 
+  check();
+  if (flatten) {
+    onPhase("Rasterising pages into images…", 56);
+    out = await flattenPdf(
+      toArrayBuffer(out),
+      { targetWidth: 1600, quality: Math.min(0.95, Math.max(0.4, flatten.quality)) },
+      (value) => onPhase("Rasterising pages into images…", 56 + (value / 100) * 8),
+    );
+    check();
+  }
+  if (sanitize) {
+    onPhase("Removing metadata, scripts and annotations…", 68);
+    out = await sanitizeOutput(out, sanitize);
+    check();
+  }
   if (compress) {
-    onPhase("Compressing embedded images…", 70);
+    onPhase("Compressing embedded images…", 80);
     const config = COMPRESSION_LEVELS[compress.level];
     const result = await recompressImages(toArrayBuffer(out), config, () => undefined);
     if (result.bytes.byteLength < out.byteLength) out = result.bytes;
+    check();
   }
   onPhase("Done", 100);
   return out;
 }
 
+/* ------------------------------------------------------------------ *
+ * Pipeline files (save / load)
+ * ------------------------------------------------------------------ */
+interface PipelineFileDocument {
+  application: "paperly";
+  version: 1;
+  kind: "workflow-pipeline";
+  savedAt: string;
+  merge: boolean;
+  steps: Partial<Step>[];
+}
+
+function normalizeStep(raw: Partial<Step>, index: number): Step {
+  const kind = STEP_ORDER.find((entry) => entry === raw.kind);
+  if (!kind) throw new Error(`Step ${index + 1} uses an operation Paperly doesn’t have.`);
+  const base = newStep(kind);
+  const number = (value: unknown, fallback: number, min: number, max: number) =>
+    typeof value === "number" && Number.isFinite(value) ? Math.min(max, Math.max(min, value)) : fallback;
+  return {
+    ...base,
+    angle: raw.angle === 180 || raw.angle === 270 ? raw.angle : 90,
+    range: typeof raw.range === "string" ? raw.range.slice(0, 120) : "",
+    text: typeof raw.text === "string" ? raw.text.slice(0, 80) : base.text,
+    opacity: number(raw.opacity, base.opacity, 0.05, 0.6),
+    size: number(raw.size, base.size, 12, 72),
+    position: raw.position === "top" ? "top" : "bottom",
+    start: Math.round(number(raw.start, 1, 1, 5000)),
+    level: raw.level === "light" || raw.level === "strong" ? raw.level : "balanced",
+    quality: number(raw.quality, base.quality, 0.4, 0.95),
+    stripMeta: raw.stripMeta !== false,
+    stripActions: raw.stripActions !== false,
+    stripAnnots: raw.stripAnnots === true,
+  };
+}
+
+interface DryRunRow {
+  label: string;
+  detail: string;
+  pagesIn: number;
+  pagesOut: number;
+  note: string;
+}
+
+interface DryRunResult {
+  rows: DryRunRow[];
+  pagesIn: number;
+  pagesOut: number;
+  perFile: number[];
+  counts: number[];
+}
+
+interface WorkflowResult {
+  bytes: Uint8Array;
+  name: string;
+  count: number;
+  merged: boolean;
+  zip: boolean;
+  steps: number;
+  totalPages: number;
+  signature: string;
+}
+
+const WORKFLOW_DEFAULTS = { merge: false };
+
 export function WorkflowTool() {
   const initial = useInitialFiles();
+  const opts = useToolPreferences("workflow", WORKFLOW_DEFAULTS);
   const [files, setFiles] = useState<File[]>(initial);
   const [steps, setSteps] = useState<Step[]>([]);
-  const [merge, setMerge] = useState(false);
   const [password, setPassword] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [phase, setPhase] = useState("");
-  const [progress, setProgress] = useState(0);
-  const [error, setError] = useState("");
-  const [result, setResult] = useState<{ bytes: Uint8Array; name: string; count: number; merged: boolean } | null>(null);
+  const [inputError, setInputError] = useState("");
+  const [dry, setDry] = useState<DryRunResult | null>(null);
+  const [dryBusy, setDryBusy] = useState(false);
+  const [dryError, setDryError] = useState("");
+  const [dragIndex, setDragIndex] = useState<number | null>(null);
+  const [dropIndex, setDropIndex] = useState<number | null>(null);
+  const pageCounts = useRef(new Map<string, number>());
+  const loadRef = useRef<HTMLInputElement | null>(null);
+  const job = useJob<WorkflowResult>();
+
+  const merge = opts.value.merge;
+  const signature = JSON.stringify({
+    steps: steps.map((step) => ({ ...step, id: undefined })),
+    files: files.map((file) => `${file.name}:${file.size}:${file.lastModified}`),
+    merge,
+    encrypted: password.length > 0,
+  });
 
   useEffect(() => {
-    setResult(null);
-  }, [files, steps, merge, password]);
+    setDry(null);
+  }, [files, steps]);
 
   const patch = (id: string, changes: Partial<Step>) => {
     setSteps((current) => current.map((step) => (step.id === id ? { ...step, ...changes } : step)));
@@ -227,48 +418,177 @@ export function WorkflowTool() {
     });
   };
 
+  const moveTo = (from: number, to: number) => {
+    setSteps((current) => {
+      if (from === to || from < 0 || to < 0 || from >= current.length || to >= current.length) return current;
+      const next = [...current];
+      const [item] = next.splice(from, 1);
+      next.splice(to, 0, item);
+      return next;
+    });
+  };
+
+  const duplicate = (id: string) => {
+    setSteps((current) => {
+      if (current.length >= MAX_STEPS) return current;
+      const index = current.findIndex((step) => step.id === id);
+      if (index < 0) return current;
+      const copy: Step = { ...current[index], id: uid() };
+      return [...current.slice(0, index + 1), copy, ...current.slice(index + 1)];
+    });
+  };
+
   const addFiles = (incoming: File[]) => {
     const pdfs = incoming.filter((file) => /\.pdf$/i.test(file.name) || file.type === "application/pdf");
     setFiles((current) => [...current, ...pdfs].slice(0, MAX_FILES));
   };
 
-  const run = async () => {
+  const savePipeline = () => {
+    if (!steps.length) {
+      setInputError("Add at least one step before saving a pipeline.");
+      return;
+    }
+    const payload: PipelineFileDocument = {
+      application: "paperly",
+      version: 1,
+      kind: "workflow-pipeline",
+      savedAt: new Date().toISOString(),
+      merge,
+      steps: steps.map((step) => ({ ...step, id: undefined })),
+    };
+    downloadBytes(
+      new Uint8Array(new TextEncoder().encode(`${JSON.stringify(payload, null, 2)}\n`)),
+      "paperly-pipeline.json",
+      "application/json",
+    );
+    setInputError("");
+  };
+
+  const loadPipeline = async (file: File) => {
+    setInputError("");
+    try {
+      const raw = JSON.parse(await file.text()) as Partial<PipelineFileDocument> & { steps?: unknown };
+      const rawSteps = Array.isArray(raw.steps) ? raw.steps : [];
+      if (!rawSteps.length) throw new Error("That file doesn’t contain any pipeline steps.");
+      const loaded = rawSteps.slice(0, MAX_STEPS).map((entry, index) => normalizeStep((entry ?? {}) as Partial<Step>, index));
+      setSteps(loaded);
+      if (typeof raw.merge === "boolean") opts.set("merge", raw.merge);
+      setDry(null);
+    } catch (err) {
+      setInputError(friendlyProcessingError(err, "That JSON file isn’t a Paperly pipeline."));
+    }
+  };
+
+  const currentPageCount = async (file: File) => {
+    const key = `${file.name}:${file.size}:${file.lastModified}`;
+    const cached = pageCounts.current.get(key);
+    if (cached !== undefined) return cached;
+    const doc = await openPdfLib(await readFileBytes(file));
+    const count = doc.getPageCount();
+    pageCounts.current.set(key, count);
+    return count;
+  };
+
+  const runDry = async () => {
     if (!files.length) {
-      setError("Add at least one PDF to start a workflow.");
+      setDryError("Add at least one PDF to plan a workflow.");
       return;
     }
     if (!steps.length) {
-      setError("Add at least one step to your workflow.");
+      setDryError("Add at least one step to plan a workflow.");
       return;
     }
-    if (password && password.length < 4) {
-      setError("Use at least 4 characters for the password, or leave it empty.");
-      return;
-    }
-    setBusy(true);
-    setError("");
-    setResult(null);
-    setProgress(2);
+    setDryBusy(true);
+    setDryError("");
     try {
+      const counts: number[] = [];
+      for (const file of files) counts.push(await currentPageCount(file));
+      const kept = counts.map((count) => new Set(Array.from({ length: count }, (_, index) => index)));
+      const pagesIn = counts.reduce((sum, count) => sum + count, 0);
+      const rows: DryRunRow[] = [];
+      for (const step of steps) {
+        const before = kept.reduce((sum, set) => sum + set.size, 0);
+        let note = "";
+        if (step.kind === "extract") {
+          if (!step.range.trim()) note = "No range set — every page is kept.";
+          else {
+            counts.forEach((count, index) => {
+              try {
+                kept[index] = new Set(parseRanges(step.range, count).map((page) => page - 1));
+              } catch {
+                note = "That range doesn’t fit these files, so the step is skipped.";
+              }
+            });
+          }
+        } else if (step.kind === "remove") {
+          if (!step.range.trim()) note = "No range set — nothing is removed.";
+          else {
+            counts.forEach((count, index) => {
+              try {
+                for (const page of parseRanges(step.range, count)) kept[index].delete(page - 1);
+              } catch {
+                note = "That range doesn’t fit these files, so the step is skipped.";
+              }
+            });
+          }
+        }
+        const after = kept.reduce((sum, set) => sum + set.size, 0);
+        if (after === 0) note = note || "This step would remove every page.";
+        rows.push({ label: STEP_META[step.kind].label, detail: describeStep(step), pagesIn: before, pagesOut: after, note });
+      }
+      setDry({
+        rows,
+        pagesIn,
+        pagesOut: kept.reduce((sum, set) => sum + set.size, 0),
+        perFile: kept.map((set) => set.size),
+        counts,
+      });
+    } catch (err) {
+      setDryError(friendlyProcessingError(err, "The dry run couldn’t read these files."));
+    } finally {
+      setDryBusy(false);
+    }
+  };
+
+  const run = () =>
+    job.run(async (reporter) => {
+      if (!files.length) throw new Error("Add at least one PDF to start a workflow.");
+      if (!steps.length) throw new Error("Add at least one step to your workflow.");
+      if (password && password.length < 4) throw new Error("Use at least 4 characters for the password, or leave it empty.");
+
       const outputs: { name: string; bytes: Uint8Array }[] = [];
+      let totalPages = 0;
       for (let index = 0; index < files.length; index++) {
         const file = files[index];
-        setPhase(`Processing ${file.name} (${index + 1} of ${files.length})…`);
-        setProgress(4 + (index / files.length) * 80);
+        reporter.report(4 + (index / files.length) * 76, `Processing ${file.name}…`, `${index + 1} of ${files.length}`);
+        if (reporter.cancelled) throw new JobCancelledError();
         const bytes = await readFileBytes(file);
-        const processed = await runPipeline(bytes, steps, (label, value) => {
-          setPhase(`${file.name}: ${label}`);
-          setProgress(4 + (index / files.length) * 80 + (value / 100) * (80 / files.length));
-        });
+        const processed = await runPipeline(
+          bytes,
+          steps,
+          (label, value) => {
+            reporter.report(
+              4 + (index / files.length) * 76 + (value / 100) * (76 / files.length),
+              `${file.name} · ${label}`,
+              `File ${index + 1} of ${files.length}`,
+            );
+          },
+          () => reporter.cancelled,
+        );
+        try {
+          totalPages += (await openPdfLib(processed)).getPageCount();
+        } catch {
+          /* page count is informational only */
+        }
         outputs.push({ name: `${sanitizeName(baseName(file.name))}-workflow.pdf`, bytes: processed });
       }
 
+      if (reporter.cancelled) throw new JobCancelledError();
       let finalBytes: Uint8Array;
       let finalName: string;
       let merged = false;
       if (merge && outputs.length > 1) {
-        setPhase("Merging every result into one document…");
-        setProgress(88);
+        reporter.report(84, "Merging every result into one document…");
         const combined = await PDFDocument.create();
         for (const output of outputs) {
           const source = await openPdfLib(output.bytes);
@@ -278,6 +598,7 @@ export function WorkflowTool() {
         finalBytes = await combined.save({ useObjectStreams: true });
         finalName = `${sanitizeName(baseName(files[0].name))}-workflow.pdf`;
         merged = true;
+        totalPages = combined.getPageCount();
       } else if (merge) {
         finalBytes = outputs[0].bytes;
         finalName = outputs[0].name;
@@ -288,8 +609,7 @@ export function WorkflowTool() {
       }
 
       if (password) {
-        setPhase("Encrypting the output with AES-256…");
-        setProgress(94);
+        reporter.report(92, "Encrypting the output with AES-256…");
         const targets = merged ? [{ name: finalName, bytes: finalBytes }] : outputs;
         for (const target of targets) {
           const doc = await openPdfLib(target.bytes);
@@ -299,28 +619,34 @@ export function WorkflowTool() {
         if (merged) finalBytes = targets[0].bytes;
       }
 
-      setProgress(100);
-      if (merged) {
-        setResult({ bytes: finalBytes, name: finalName, count: files.length, merged: true });
-      } else {
+      if (reporter.cancelled) throw new JobCancelledError();
+      if (!merged) {
         await zipAndDownload(
           outputs.map((output) => ({ name: output.name, data: output.bytes })),
           "paperly-workflow.zip",
         );
-        setResult({
-          bytes: new Uint8Array(),
-          name: `paperly-workflow.zip`,
-          count: outputs.length,
-          merged: false,
-        });
       }
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setBusy(false);
-      setPhase("");
-    }
-  };
+      return {
+        bytes: finalBytes,
+        name: merged ? finalName : "paperly-workflow.zip",
+        count: outputs.length,
+        merged,
+        zip: !merged,
+        steps: steps.length,
+        totalPages,
+        signature,
+      };
+    });
+
+  const result = job.result;
+  const fresh = Boolean(result) && result?.signature === signature;
+  usePrimaryShortcut(() => void run(), Boolean(files.length) && Boolean(steps.length) && !job.busy);
+  useDownloadShortcut(
+    () => {
+      if (result?.merged) downloadOutput(result.bytes, result.name, "application/pdf");
+    },
+    fresh && Boolean(result?.merged),
+  );
 
   return (
     <div className="space-y-5">
@@ -329,15 +655,23 @@ export function WorkflowTool() {
           <WorkflowIcon className="h-4 w-4" /> One pipeline, every file
         </p>
         <p className="mt-1 text-ink/75">
-          Chain up to {MAX_STEPS} operations and run them across up to {MAX_FILES} PDFs in one pass — rotate, trim, watermark, number,
-          compress, merge and encrypt. Other suites make you repeat a single operation; here the whole recipe runs locally, once.
+          Chain up to {MAX_STEPS} operations and run them across up to {MAX_FILES} PDFs in one pass — rotate, trim, watermark, number, flatten,
+          sanitise, compress, merge and encrypt. The whole recipe runs locally, once. Steps always run in this order: page selection, overlays,
+          flatten, sanitise, compression.
         </p>
       </div>
 
       <div>
         <p className="mb-2 text-[11px] font-semibold uppercase tracking-[0.1em] text-ink/75">1 · Input files</p>
         {files.length === 0 ? (
-          <FileDrop accept="application/pdf,.pdf" acceptLabel="PDF files to process" multiple onFiles={addFiles} />
+          <FileDrop
+            accept="application/pdf,.pdf"
+            acceptLabel="PDF files to process"
+            multiple
+            onFiles={addFiles}
+            sample={SAMPLE.pdf}
+            hint={`Up to ${MAX_FILES} PDFs, processed in this tab only.`}
+          />
         ) : (
           <div className="space-y-2">
             {files.map((file, index) => (
@@ -369,17 +703,67 @@ export function WorkflowTool() {
 
       <div>
         <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-          <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-ink/75">2 · Pipeline</p>
-          <Badge tone="forest">{steps.length} step{steps.length === 1 ? "" : "s"}</Badge>
+          <div className="flex items-center gap-2">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-ink/75">2 · Pipeline</p>
+            <Badge tone="forest">
+              {steps.length} step{steps.length === 1 ? "" : "s"}
+            </Badge>
+          </div>
+          <div className="flex flex-wrap items-center gap-1.5">
+            <button
+              type="button"
+              onClick={() => void runDry()}
+              disabled={dryBusy || job.busy || !steps.length || !files.length}
+              className="inline-flex h-7 items-center gap-1 rounded-lg border border-line bg-paper px-2 text-[11px] font-medium text-ink/70 transition-colors hover:border-forest/35 hover:text-forest disabled:opacity-40"
+            >
+              <Play className="h-3 w-3" /> {dryBusy ? "Planning…" : "Dry run"}
+            </button>
+            <button
+              type="button"
+              onClick={savePipeline}
+              className="inline-flex h-7 items-center gap-1 rounded-lg border border-line bg-paper px-2 text-[11px] font-medium text-ink/70 transition-colors hover:border-forest/35 hover:text-forest"
+            >
+              <Download className="h-3 w-3" /> Save JSON
+            </button>
+            <button
+              type="button"
+              onClick={() => loadRef.current?.click()}
+              className="inline-flex h-7 items-center gap-1 rounded-lg border border-line bg-paper px-2 text-[11px] font-medium text-ink/70 transition-colors hover:border-forest/35 hover:text-forest"
+            >
+              <Upload className="h-3 w-3" /> Load JSON
+            </button>
+            <input
+              ref={loadRef}
+              type="file"
+              accept="application/json,.json"
+              className="sr-only"
+              aria-label="Load a saved pipeline"
+              onChange={(event) => {
+                const file = event.target.files?.[0];
+                event.target.value = "";
+                if (file) void loadPipeline(file);
+              }}
+            />
+            {steps.length > 0 && (
+              <button
+                type="button"
+                onClick={() => setSteps([])}
+                className="inline-flex h-7 items-center gap-1 rounded-lg px-2 text-[11px] font-medium text-ink/60 transition-colors hover:text-clay-ink"
+              >
+                <X className="h-3 w-3" /> Clear
+              </button>
+            )}
+          </div>
         </div>
         <div className="mb-2 flex flex-wrap gap-1.5">
-          {(Object.keys(STEP_META) as StepKind[]).map((kind) => {
+          {STEP_ORDER.map((kind) => {
             const meta = STEP_META[kind];
             const Icon = meta.icon;
             return (
               <button
                 key={kind}
                 type="button"
+                title={meta.hint}
                 disabled={steps.length >= MAX_STEPS}
                 onClick={() => setSteps((current) => [...current, newStep(kind)])}
                 className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-line bg-paper px-2.5 text-[11.5px] font-medium text-ink/75 transition-colors hover:border-forest/30 hover:text-forest disabled:opacity-40"
@@ -389,6 +773,11 @@ export function WorkflowTool() {
             );
           })}
         </div>
+        {inputError && (
+          <p role="alert" className="mb-2 text-[11px] font-medium text-clay-ink">
+            {inputError}
+          </p>
+        )}
 
         {steps.length === 0 ? (
           <p className="rounded-xl border border-dashed border-line bg-bone-deep/25 px-3 py-4 text-[12px] text-muted">
@@ -400,8 +789,44 @@ export function WorkflowTool() {
               const meta = STEP_META[step.kind];
               const Icon = meta.icon;
               return (
-                <li key={step.id} className="rounded-xl border border-line bg-paper p-3">
-                  <div className="flex items-center gap-2">
+                <li
+                  key={step.id}
+                  className={
+                    dropIndex === index && dragIndex !== null && dragIndex !== index
+                      ? "rounded-xl border border-forest/50 bg-lime/10 p-3"
+                      : "rounded-xl border border-line bg-paper p-3"
+                  }
+                >
+                  <div
+                    className="flex items-center gap-2"
+                    draggable
+                    onDragStart={(event) => {
+                      setDragIndex(index);
+                      event.dataTransfer.effectAllowed = "move";
+                    }}
+                    onDragOver={(event) => {
+                      if (dragIndex === null) return;
+                      event.preventDefault();
+                      setDropIndex(index);
+                    }}
+                    onDrop={(event) => {
+                      event.preventDefault();
+                      if (dragIndex !== null) moveTo(dragIndex, index);
+                      setDragIndex(null);
+                      setDropIndex(null);
+                    }}
+                    onDragEnd={() => {
+                      setDragIndex(null);
+                      setDropIndex(null);
+                    }}
+                  >
+                    <span
+                      aria-hidden="true"
+                      title="Drag to reorder"
+                      className="cursor-grab text-ink/40 active:cursor-grabbing"
+                    >
+                      <GripVertical className="h-3.5 w-3.5" />
+                    </span>
                     <span className="flex h-5 w-5 items-center justify-center rounded-full bg-forest text-[10px] font-bold text-lime">{index + 1}</span>
                     <Icon className="h-3.5 w-3.5 text-forest" />
                     <p className="text-[12.5px] font-semibold">{meta.label}</p>
@@ -411,6 +836,9 @@ export function WorkflowTool() {
                       </Button>
                       <Button variant="ghost" size="sm" aria-label="Move step down" disabled={index === steps.length - 1} onClick={() => move(index, 1)}>
                         <ArrowDown className="h-3.5 w-3.5" />
+                      </Button>
+                      <Button variant="ghost" size="sm" aria-label="Duplicate step" disabled={steps.length >= MAX_STEPS} onClick={() => duplicate(step.id)}>
+                        <Copy className="h-3.5 w-3.5" />
                       </Button>
                       <Button
                         variant="ghost"
@@ -494,11 +922,81 @@ export function WorkflowTool() {
                         }))}
                       />
                     )}
+                    {step.kind === "flatten" && (
+                      <div className="grid gap-2 sm:grid-cols-2">
+                        <Field label={`JPEG quality · ${Math.round(step.quality * 100)}%`}>
+                          <input
+                            type="range"
+                            min={40}
+                            max={95}
+                            value={Math.round(step.quality * 100)}
+                            aria-label="Flatten JPEG quality"
+                            onChange={(event) => patch(step.id, { quality: Number(event.target.value) / 100 })}
+                            className="w-full accent-forest"
+                          />
+                        </Field>
+                        <p className="self-end pb-2 text-[11px] leading-relaxed text-muted">
+                          Each page becomes an image, so text is no longer selectable and every hidden layer, script or annotation is gone.
+                        </p>
+                      </div>
+                    )}
+                    {step.kind === "sanitize" && (
+                      <div className="grid gap-2 sm:grid-cols-3">
+                        <Switch checked={step.stripMeta} onChange={(value) => patch(step.id, { stripMeta: value })} label="Metadata" description="XMP, info" />
+                        <Switch
+                          checked={step.stripActions}
+                          onChange={(value) => patch(step.id, { stripActions: value })}
+                          label="Scripts"
+                          description="JS, actions, forms"
+                        />
+                        <Switch
+                          checked={step.stripAnnots}
+                          onChange={(value) => patch(step.id, { stripAnnots: value })}
+                          label="Annotations"
+                          description="Comments, links"
+                        />
+                      </div>
+                    )}
                   </div>
                 </li>
               );
             })}
           </ol>
+        )}
+
+        {dryError && (
+          <p role="alert" className="mt-2 text-[11px] font-medium text-clay-ink">
+            {dryError}
+          </p>
+        )}
+        {dry && (
+          <div className="mt-3 rounded-xl border border-line bg-paper p-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="flex items-center gap-1.5 text-[12px] font-semibold text-forest">
+                <Play className="h-3.5 w-3.5" /> Dry run · nothing processed yet
+              </p>
+              <span className="text-[11px] text-muted">
+                {files.length} file{files.length === 1 ? "" : "s"} · {dry.pagesIn} pages in → {dry.pagesOut} pages out
+              </span>
+            </div>
+            <div className="mt-2 space-y-1">
+              {dry.rows.map((row, index) => (
+                <div key={`${row.label}-${index}`} className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border border-line bg-bone/40 px-2.5 py-1.5">
+                  <span className="flex h-4 w-4 items-center justify-center rounded-full bg-forest text-[9px] font-bold text-lime">{index + 1}</span>
+                  <span className="text-[11.5px] font-semibold">{row.label}</span>
+                  <span className="min-w-0 flex-1 truncate text-[11px] text-muted">{row.detail}</span>
+                  <span className="text-[11px] tabular-nums text-ink/70">
+                    {row.pagesIn} → <strong className="text-forest">{row.pagesOut}</strong> pages
+                  </span>
+                  {row.note && <span className="w-full text-[10.5px] text-amber-800">{row.note}</span>}
+                </div>
+              ))}
+            </div>
+            <p className="mt-2 text-[10.5px] leading-relaxed text-muted">
+              Final page counts per file: {dry.perFile.map((count, index) => `${files[index]?.name ?? `file ${index + 1}`} (${count})`).join(", ")}. Flattening
+              and compression change file size, not page count.
+            </p>
+          </div>
         )}
       </div>
 
@@ -506,10 +1004,10 @@ export function WorkflowTool() {
         <p className="mb-2 text-[11px] font-semibold uppercase tracking-[0.1em] text-ink/75">3 · Output</p>
         <div className="grid gap-3 sm:grid-cols-2">
           <div className="rounded-xl border border-line bg-paper p-3">
-            <Switch checked={merge} onChange={setMerge} label="Merge all results into one PDF" />
+            <Switch checked={merge} onChange={(value) => opts.set("merge", value)} label="Merge all results into one PDF" />
             <p className="mt-1 text-[11px] text-muted">Off: each input gets its own PDF, delivered as a ZIP.</p>
           </div>
-          <Field label="Password (optional)" hint="Encrypts the output with AES-256. At least 4 characters.">
+          <Field label="Password (optional)" hint="Encrypts the output with AES-256. At least 4 characters. Never saved.">
             <div className="relative">
               <LockKeyhole className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-ink/60" />
               <TextInput
@@ -517,7 +1015,7 @@ export function WorkflowTool() {
                 value={password}
                 placeholder="Leave empty for no encryption"
                 autoComplete="new-password"
-                className={`${""} pl-8`}
+                className="pl-8"
                 onChange={(event) => setPassword(event.target.value)}
               />
             </div>
@@ -525,35 +1023,48 @@ export function WorkflowTool() {
         </div>
       </div>
 
-      {error && <Alert tone="error">{error}</Alert>}
-      <div className="border-t border-line pt-4">
-        <Button onClick={run} loading={busy} disabled={!files.length || !steps.length}>
-          <Combine className="h-4 w-4" /> {busy ? "Running workflow…" : `Run workflow on ${files.length || 0} file${files.length === 1 ? "" : "s"}`}
+      {job.failed && <Alert tone="error">{job.error}</Alert>}
+      {job.status === "cancelled" && <Alert tone="info">Cancelled — nothing was downloaded. Your files and pipeline are unchanged.</Alert>}
+      <div className="flex flex-wrap items-center gap-2 border-t border-line pt-4">
+        <Button onClick={() => void run()} loading={job.busy} disabled={!files.length || !steps.length}>
+          <Combine className="h-4 w-4" /> {job.busy ? "Running workflow…" : `Run workflow on ${files.length || 0} file${files.length === 1 ? "" : "s"}`}
         </Button>
-        {busy && <div className="mt-3"><Progress value={progress} label={phase} /></div>}
+        {job.busy && (
+          <Button variant="ghost" onClick={job.cancel}>
+            Cancel
+          </Button>
+        )}
+        <span className="text-[11.5px] text-muted">
+          {steps.length} step{steps.length === 1 ? "" : "s"} · {opts.changed ? "options changed" : "default output"} · ⌘↵ to run
+        </span>
       </div>
+      {job.busy && (
+        <Progress value={job.percent ?? undefined} label={job.label || "Running the workflow…"} etaMs={job.etaMs} detail={describeJobTime(job)} />
+      )}
 
-      {result && result.merged && result.bytes.byteLength > 0 && (
+      {fresh && result?.merged && result.bytes.byteLength > 0 && (
         <DownloadPanel
           filename={result.name}
           size={result.bytes.byteLength}
           onDownload={() => downloadBytes(result.bytes, result.name)}
           title="Workflow complete"
-          description={`${steps.length} step${steps.length === 1 ? "" : "s"} applied across ${result.count} PDF${result.count === 1 ? "" : "s"} · merged into one document`}
+          description={`${result.steps} step${result.steps === 1 ? "" : "s"} applied across ${result.count} PDF${result.count === 1 ? "" : "s"} · merged into one document`}
           bytes={result.bytes}
           handoffIds={["compress", "protect", "sign"]}
+          facts={[{ label: "Pages", value: String(result.totalPages) }]}
         />
       )}
-      {result && !result.merged && (
+      {fresh && result && !result.merged && (
         <Alert tone="success" title="Workflow complete">
-          {steps.length} step{steps.length === 1 ? "" : "s"} applied to {result.count} PDF{result.count === 1 ? "" : "s"}. Your ZIP
+          {result.steps} step{result.steps === 1 ? "" : "s"} applied to {result.count} PDF{result.count === 1 ? "" : "s"}. Your ZIP
           (paperly-workflow.zip) has been downloaded — if the browser blocked it, run the workflow again and allow downloads for this site.
         </Alert>
       )}
 
       <div className="rounded-xl border border-line bg-bone-deep/30 p-3 text-[11px] leading-relaxed text-muted">
-        Every step runs in this tab with PDF.js and pdf-lib. Rotations, page removal, extraction, watermarks and numbering rebuild only the page
-        tree; compression re-encodes embedded photos; encryption uses AES-256 and is verified before the result is offered.
+        Every step runs in this tab with PDF.js and pdf-lib. Rotations, page removal, extraction, watermarks and numbering rebuild only the page tree;
+        flattening rasterises each page; sanitising removes metadata, scripts and annotations you select; compression re-encodes embedded photos;
+        encryption uses AES-256 and is verified before the result is offered. A pipeline saved as JSON never contains your files or your password.
       </div>
     </div>
   );

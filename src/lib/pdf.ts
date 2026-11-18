@@ -4,6 +4,7 @@ import * as pdfjs from "pdfjs-dist";
 import type { PDFDocumentProxy, PDFPageProxy } from "pdfjs-dist";
 import JSZip from "jszip";
 import { fileExt } from "@/lib/format";
+import { parsePageQuery } from "@/lib/pageQuery";
 
 
 /** Attach the original error without relying on ES2022 ErrorOptions. */
@@ -321,31 +322,7 @@ export function matchesAccept(file: File, accept: string): boolean {
 export type PageSelection = { kind: "all" } | { kind: "list"; pages: number[] };
 
 export function parseRanges(input: string, total: number): number[] {
-  const trimmed = input.trim();
-  if (!trimmed || /^all$/i.test(trimmed)) return Array.from({ length: total }, (_, i) => i + 1);
-  const pages: number[] = [];
-  for (const rawPart of trimmed.split(/[,;\s]+/).filter(Boolean)) {
-    const part = rawPart.replace(/page/i, "").trim();
-    const m = part.match(/^(\d*)\s*-\s*(\d*)$/);
-    if (m) {
-      const start = m[1] ? Number(m[1]) : 1;
-      const end = m[2] ? Number(m[2]) : total;
-      if (start < 1 || end > total || start > end) {
-        throw new Error(`“${rawPart}” is outside this PDF. It has ${total} page${total === 1 ? "" : "s"}.`);
-      }
-      for (let p = start; p <= end; p++) pages.push(p);
-    } else if (/^\d+$/.test(part)) {
-      const p = Number(part);
-      if (p < 1 || p > total) {
-        throw new Error(`Page ${p} doesn’t exist. This PDF has ${total} page${total === 1 ? "" : "s"}.`);
-      }
-      pages.push(p);
-    } else {
-      throw new Error(`“${rawPart}” isn’t a valid page. Try something like 1-3, 5, 8-10.`);
-    }
-  }
-  if (!pages.length) throw new Error("Choose at least one page.");
-  return pages;
+  return parsePageQuery(input, total);
 }
 
 /** Ordered, de-duplicated page indices (1-based) */

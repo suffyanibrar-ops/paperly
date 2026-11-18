@@ -4,7 +4,7 @@ import reactHooks from "eslint-plugin-react-hooks";
 import tseslint from "typescript-eslint";
 
 export default tseslint.config(
-  { ignores: ["dist/**", "node_modules/**", "coverage/**", "playwright-report/**", "test-results/**", "scripts/**", "public/**", ".pw-browsers/**", "*.mjs"] },
+  { ignores: ["dist/**", "dist-preview/**", "tests/e2e-output/**", "node_modules/**", "coverage/**", "playwright-report/**", "test-results/**", "scripts/**", "public/**", ".pw-browsers/**", "*.mjs"] },
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {
@@ -17,6 +17,7 @@ export default tseslint.config(
       "@typescript-eslint/no-unused-vars": ["warn", { argsIgnorePattern: "^_", varsIgnorePattern: "^_" }],
       "@typescript-eslint/no-unused-expressions": "warn",
       "no-empty": ["error", { allowEmptyCatch: true }],
+      "no-console": ["error", { allow: ["error", "warn"] }],
       "no-useless-escape": "off",
       "prefer-const": "warn",
       "react-hooks/exhaustive-deps": "warn",

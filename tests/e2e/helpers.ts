@@ -29,7 +29,9 @@ export async function clickAction(page: Page, name: string | RegExp) {
 }
 
 export async function waitSuccess(page: Page, pattern: RegExp, timeout = 180_000) {
-  await page.getByText(pattern).first().waitFor({ timeout });
+  // Match visible text only: help copy can contain words like "smaller" and
+  // would otherwise satisfy the locator before the result panel renders.
+  await page.getByText(pattern).filter({ visible: true }).first().waitFor({ timeout });
 }
 
 export async function saveDownload(page: Page, tool: string, pattern: RegExp) {

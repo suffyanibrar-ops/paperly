@@ -39,6 +39,18 @@ describe("FileDrop validation", () => {
     expect(onFiles).not.toHaveBeenCalled();
   });
 
+  it("creates and accepts a locally generated sample", async () => {
+    const onFiles = vi.fn();
+    const sample = {
+      label: "Try a sample PDF",
+      create: async () => new File(["%PDF-1.7\n%sample"], "sample.pdf", { type: "application/pdf" }),
+    };
+    render(<FileDrop accept="application/pdf,.pdf" acceptLabel="PDF files" onFiles={onFiles} sample={sample} />);
+    fireEvent.click(screen.getByRole("button", { name: /try a sample pdf/i }));
+    await waitFor(() => expect(onFiles).toHaveBeenCalledTimes(1));
+    expect((onFiles.mock.calls[0][0] as File[])[0].name).toBe("sample.pdf");
+  });
+
   it("associates a labelled drop zone with a native file input", () => {
     render(<FileDrop accept="application/pdf,.pdf" acceptLabel="PDF files" onFiles={() => {}} />);
     const input = document.querySelector('input[type="file"]') as HTMLInputElement;

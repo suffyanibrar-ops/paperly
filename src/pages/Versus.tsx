@@ -217,6 +217,55 @@ const GROUPS: { title: string; blurb: string; rows: Row[] }[] = [
     ],
   },
   {
+    title: "Craft and control",
+    blurb: "The difference between a tool that works and one that is pleasant under pressure.",
+    rows: [
+      {
+        capability: "Rename, preview or checksum before saving",
+        paperly: "All three, plus copy/share",
+        ilovepdf: "Download only",
+        paperlyState: "yes",
+        iloveState: "no",
+        note: "Paperly’s result panel renders a local preview, lets you edit the filename and can show the SHA-256 of the exact bytes you download.",
+      },
+      {
+        capability: "Cancel a long job and retry",
+        paperly: "Every long operation",
+        ilovepdf: "Not publicly documented",
+        paperlyState: "yes",
+        iloveState: "partial",
+      },
+      {
+        capability: "Split modes",
+        paperly: "Extract, every N, odd/even, split-in-half, bookmarks",
+        ilovepdf: "Page ranges and single pages",
+        paperlyState: "yes",
+        iloveState: "partial",
+      },
+      {
+        capability: "Proof after redaction",
+        paperly: "Re-extracts the output and checks matches are gone",
+        ilovepdf: "Server-side process, no in-app proof",
+        paperlyState: "yes",
+        iloveState: "partial",
+      },
+      {
+        capability: "Remembers your tool settings",
+        paperly: "Yes, resettable from Activity",
+        ilovepdf: "Limited per-session defaults",
+        paperlyState: "yes",
+        iloveState: "partial",
+      },
+      {
+        capability: "Keyboard-first operation",
+        paperly: "⌘K, ⌘↵, ⌘S, shortcut sheet, page-range keys",
+        ilovepdf: "Mouse-first interface",
+        paperlyState: "yes",
+        iloveState: "partial",
+      },
+    ],
+  },
+  {
     title: "Platform and trust",
     blurb: "Where a larger, longer-established provider genuinely leads.",
     rows: [

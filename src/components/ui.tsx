@@ -9,8 +9,10 @@ import {
   File as FileIcon,
   FileText,
   Info,
+  Keyboard,
   Loader2,
   ShieldCheck,
+  Sparkles,
   Star,
   UploadCloud,
   X,
@@ -18,6 +20,7 @@ import {
 import {
   createContext,
   useContext,
+  useEffect,
   useId,
   useRef,
   useState,
@@ -32,8 +35,34 @@ import {
 import { cn } from "@/utils/cn";
 import { CATEGORIES, getTool, type Tool } from "@/lib/toolRegistry";
 import { useFavorites } from "@/lib/activity";
+import { isTypingTarget } from "@/lib/hotkeys";
 import { fileExt, formatBytes } from "@/lib/format";
 import { friendlyProcessingError, validateUpload } from "@/lib/security";
+import type { SampleSpec } from "@/lib/sample";
+
+/* One global paste listener: the most recently mounted drop zone wins, so a
+ * page with several zones never adds the same pasted file twice. */
+const pasteHandlers: ((files: File[]) => void)[] = [];
+let pasteInstalled = false;
+function registerPaste(handler: (files: File[]) => void): () => void {
+  if (!pasteInstalled && typeof window !== "undefined") {
+    window.addEventListener("paste", (event) => {
+      const target = event.target as HTMLElement | null;
+      const tag = target?.tagName?.toLowerCase();
+      if (tag === "input" || tag === "textarea" || target?.isContentEditable) return;
+      const files = Array.from(event.clipboardData?.files ?? []);
+      if (!files.length) return;
+      const handlerAtTop = pasteHandlers[pasteHandlers.length - 1];
+      handlerAtTop?.(files);
+    });
+    pasteInstalled = true;
+  }
+  pasteHandlers.push(handler);
+  return () => {
+    const index = pasteHandlers.lastIndexOf(handler);
+    if (index >= 0) pasteHandlers.splice(index, 1);
+  };
+}
 
 /* ------------------------------------------------------------------ *
  * Buttons & badges
@@ -129,6 +158,8 @@ export function FileDrop({
   acceptLabel = "files",
   compact = false,
   disabled = false,
+  hint,
+  sample,
 }: {
   accept: string;
   multiple?: boolean;
@@ -136,15 +167,19 @@ export function FileDrop({
   acceptLabel?: string;
   compact?: boolean;
   disabled?: boolean;
+  /** Extra reassurance under the drop zone (limits, formats…). */
+  hint?: ReactNode;
+  /** Locally generated example so the tool can be tried with zero setup. */
+  sample?: SampleSpec;
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [dragging, setDragging] = useState(false);
   const [error, setError] = useState("");
+  const [sampleBusy, setSampleBusy] = useState(false);
   const id = useId();
 
-  const handle = async (list: FileList | null) => {
-    if (!list?.length) return;
-    const picked = Array.from(list);
+  const acceptFiles = async (picked: File[]) => {
+    if (!picked.length) return;
     const valid: File[] = [];
     const problems: string[] = [];
     for (const file of picked) {
@@ -155,14 +190,42 @@ export function FileDrop({
         problems.push(friendlyProcessingError(err, `${file.name} couldn’t be accepted.`));
       }
     }
-    setError(problems.join(" "));
+    const shown = problems.slice(0, 2).join(" ");
+    const extra = problems.length > 2 ? ` ${problems.length - 2} more file${problems.length - 2 === 1 ? "" : "s"} skipped.` : "";
+    setError(shown + extra);
     if (valid.length) onFiles(multiple ? valid : valid.slice(0, 1));
   };
+
+  // Paste a file straight from the clipboard (screenshots, copied documents).
+  // Keep the newest handler in a ref so a paste always validates against the
+  // current tool state, not the state captured when the zone mounted.
+  const acceptFilesRef = useRef(acceptFiles);
+  acceptFilesRef.current = acceptFiles;
+  useEffect(() => {
+    if (disabled) return;
+    return registerPaste((files) => {
+      void acceptFilesRef.current(files);
+    });
+  }, [disabled]);
 
   const onDrop = (e: DragEvent) => {
     e.preventDefault();
     setDragging(false);
-    if (!disabled) handle(e.dataTransfer.files);
+    if (!disabled) void acceptFiles(Array.from(e.dataTransfer.files));
+  };
+
+  const trySample = async () => {
+    if (!sample || sampleBusy) return;
+    setSampleBusy(true);
+    setError("");
+    try {
+      const file = await sample.create();
+      await acceptFiles([file]);
+    } catch (err) {
+      setError(friendlyProcessingError(err, "The sample couldn’t be prepared in this browser."));
+    } finally {
+      setSampleBusy(false);
+    }
   };
 
   return (
@@ -197,7 +260,7 @@ export function FileDrop({
           aria-label={`Choose ${acceptLabel}`}
           className="sr-only"
           onChange={(e: ChangeEvent<HTMLInputElement>) => {
-            handle(e.target.files);
+            void acceptFiles(Array.from(e.target.files ?? []));
             e.target.value = "";
           }}
         />
@@ -214,9 +277,25 @@ export function FileDrop({
         </p>
         <p className={cn("mt-1 text-muted", compact ? "text-xs" : "text-[13px]")}>
           or <span className="font-medium text-forest underline decoration-forest/30 underline-offset-2">browse your files</span>
+          {" · "}
+          <span className="whitespace-nowrap">⌘V / Ctrl+V to paste</span>
         </p>
         <p className="mt-3 text-[11px] font-medium uppercase tracking-[0.1em] text-ink/75">{acceptLabel}</p>
+        {hint ? <p className="mt-2 max-w-sm text-[11px] leading-relaxed text-muted">{hint}</p> : null}
       </label>
+      {sample ? (
+        <div className="mt-2 flex justify-center">
+          <button
+            type="button"
+            disabled={disabled || sampleBusy}
+            onClick={() => void trySample()}
+            className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-line bg-paper px-2.5 text-[11.5px] font-medium text-forest transition-colors hover:border-forest/35 hover:bg-lime/20 disabled:opacity-50"
+          >
+            <Sparkles className={cn("h-3.5 w-3.5", sampleBusy && "animate-pulse")} />
+            {sampleBusy ? "Preparing sample…" : sample.label}
+          </button>
+        </div>
+      ) : null}
       {error && (
         <p id={`${id}-error`} className="mt-2 flex items-start gap-1.5 text-xs font-medium text-clay-ink" role="alert">
           <AlertCircle className="mt-px h-3.5 w-3.5 shrink-0" /> {error}
@@ -308,12 +387,31 @@ export function Alert({
   );
 }
 
-export function Progress({ value, label }: { value?: number; label?: string }) {
+export function Progress({
+  value,
+  label,
+  detail,
+  etaMs,
+}: {
+  value?: number;
+  label?: string;
+  detail?: string;
+  /** Remaining time in milliseconds, when the engine can estimate it. */
+  etaMs?: number | null;
+}) {
+  const etaCopy =
+    typeof etaMs === "number" && etaMs > 1000 ? `about ${Math.max(1, Math.round(etaMs / 1000))}s left` : "";
   return (
-    <div className="w-full" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={value ?? undefined}>
-      <div className="mb-1.5 flex items-center justify-between text-[12px] font-medium text-forest">
-        <span>{label ?? "Working locally…"}</span>
-        {typeof value === "number" && <span className="tabular-nums text-ink/70">{Math.round(value)}%</span>}
+    <div className="w-full" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={value ?? undefined} aria-valuetext={label ?? "Working locally"}>
+      <div className="mb-1.5 flex flex-wrap items-center justify-between gap-x-3 gap-y-0.5 text-[12px] font-medium text-forest">
+        <span className="min-w-0">
+          {label ?? "Working locally…"}
+          {detail ? <span className="ml-1.5 font-normal text-muted">{detail}</span> : null}
+        </span>
+        <span className="flex items-center gap-2 tabular-nums text-ink/70">
+          {etaCopy ? <span className="text-[11px] font-normal text-muted">{etaCopy}</span> : null}
+          {typeof value === "number" && <span>{Math.round(value)}%</span>}
+        </span>
       </div>
       <div className="h-2 overflow-hidden rounded-full bg-forest/10">
         <div
@@ -340,8 +438,20 @@ export function SuccessPanel({
   secondary?: ReactNode;
   children?: ReactNode;
 }) {
+  const panelRef = useRef<HTMLDivElement>(null);
+  // Announce the result and move focus so keyboard and screen-reader users
+  // land on the download panel instead of hunting for it.
+  useEffect(() => {
+    panelRef.current?.focus({ preventScroll: true });
+  }, []);
   return (
-    <div className="animate-pop rounded-2xl border border-forest/15 bg-forest p-5 text-paper sm:p-6">
+    <div
+      ref={panelRef}
+      tabIndex={-1}
+      role="status"
+      aria-live="polite"
+      className="animate-pop rounded-2xl border border-forest/15 bg-forest p-5 text-paper outline-none sm:p-6 focus-visible:ring-2 focus-visible:ring-lime/60"
+    >
       <div className="flex flex-col gap-4 sm:flex-row sm:items-start">
         <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-lime text-forest">
           <Check className="h-5 w-5" strokeWidth={2.6} />
@@ -554,6 +664,15 @@ export function ToolTile({ tool, size = "md" }: { tool: Tool; size?: "sm" | "md"
   );
 }
 
+const SHORTCUTS: { keys: string; label: string }[] = [
+  { keys: "⌘K / Ctrl K", label: "Search every tool" },
+  { keys: "⌘↵ / Ctrl ↵", label: "Run the main action" },
+  { keys: "⌘S / Ctrl S", label: "Download the finished file" },
+  { keys: "?", label: "Show this shortcut list" },
+  { keys: "Esc", label: "Close a preview or dialog" },
+  { keys: "⇧ + click", label: "Select a range of page thumbnails" },
+];
+
 export function ToolShell({
   tool,
   children,
@@ -568,6 +687,23 @@ export function ToolShell({
   const cat = CATEGORIES[tool.category];
   const { isFavorite, toggle } = useFavorites();
   const favorite = isFavorite(tool.id);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
+
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setShortcutsOpen(false);
+        return;
+      }
+      if (event.key !== "?" || event.metaKey || event.ctrlKey || event.altKey) return;
+      if (isTypingTarget(event.target)) return;
+      event.preventDefault();
+      setShortcutsOpen((open) => !open);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
   return (
     <ToolIdContext.Provider value={tool.id}>
     <div className="pb-20 pt-7">
@@ -595,6 +731,15 @@ export function ToolShell({
             </div>
           </div>
           <div className="flex shrink-0 items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setShortcutsOpen(true)}
+              aria-label="Keyboard shortcuts"
+              title="Keyboard shortcuts (?)"
+              className="flex h-9 w-9 items-center justify-center rounded-full border border-line bg-paper text-ink/75 transition-colors hover:border-forest/30 hover:text-forest"
+            >
+              <Keyboard className="h-4 w-4" />
+            </button>
             <button
               type="button"
               aria-pressed={favorite}
@@ -684,6 +829,42 @@ export function ToolShell({
           <ShieldCheck className="h-4 w-4 text-forest" /> No sign-up. No daily limits. No watermarks on your work.
         </div>
       </div>
+      {shortcutsOpen ? (
+        <div
+          className="fixed inset-0 z-[85] flex items-center justify-center bg-ink/60 p-4 backdrop-blur-sm"
+          role="presentation"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setShortcutsOpen(false);
+          }}
+        >
+          <div role="dialog" aria-modal="true" aria-label="Keyboard shortcuts" className="w-full max-w-sm rounded-2xl border border-line bg-paper p-5 shadow-lift">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h2 className="text-[16px] font-semibold">Keyboard shortcuts</h2>
+                <p className="mt-1 text-[12px] text-muted">Work faster without leaving the keyboard.</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShortcutsOpen(false)}
+                aria-label="Close shortcuts"
+                className="flex h-8 w-8 items-center justify-center rounded-lg border border-line text-ink/60 hover:border-clay/40 hover:text-clay-ink"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <dl className="mt-4 divide-y divide-line">
+              {SHORTCUTS.map((item) => (
+                <div key={item.keys} className="flex items-center justify-between gap-3 py-2">
+                  <dt className="text-[12.5px] text-ink/75">{item.label}</dt>
+                  <dd>
+                    <kbd className="rounded border border-line bg-bone-deep/60 px-1.5 py-0.5 font-mono text-[10.5px] text-ink/70">{item.keys}</kbd>
+                  </dd>
+                </div>
+              ))}
+            </dl>
+          </div>
+        </div>
+      ) : null}
     </div>
     </ToolIdContext.Provider>
   );

@@ -13,7 +13,9 @@ Production: <https://paperlypdf.netlify.app/>
 - **Optimize** — compress (including a **target file size** mode), repair, flatten, extract images, archive readiness.
 - **Secure** — AES-256 protect/unlock, redact, find & redact by pattern, fill forms, create forms, sign, watermark, sanitize active content and metadata.
 - **Intelligence** — extract text, OCR (18 languages), compare versions, summarise, ask a question across documents, inspect a PDF’s full structure and risk surface.
-- **Platform** — command palette, local activity history, batch processing, installable offline PWA, no account, no uploads, no daily limits.
+- **Platform** — command palette and keyboard shortcuts, locally generated sample documents, remembered tool settings, cancellable jobs with progress/ETA, a result panel that can **rename, preview, copy, share and checksum** before download, local activity history, batch processing, installable offline PWA, no account, no uploads, no daily limits.
+
+Every tool also has an **Advanced options** panel with persisted settings and a shared **page picker** (thumbnails, shift-click ranges, odd/even, typed ranges).
 
 ## Architecture
 
@@ -22,6 +24,8 @@ Production: <https://paperlypdf.netlify.app/>
 | UI | React 19 + TypeScript, Tailwind CSS 4, Vite 7 |
 | Routing | Hash routes for resilient static hosting + real path URLs for the prerendered Netlify deployment; route-level `React.lazy` splitting |
 | PDF engine | PDF.js 6.2.108 (render, text, outline), `@cantoo/pdf-lib` 2.11.1 (rewrite, AES-256, forms, outline writing) |
+| Shared engines | `job` (progress/ETA/cancel/retry), `prefs` (versioned local settings), `pageQuery` (ranges, odd/even/last/steps), `output` (naming, MIME, preview data, SHA-256), `sample` (local demo documents) |
+| UX layer | `AdvancedOptions` presets/panels, `PagePicker`, `OutputPreview`, shared `DownloadPanel` (rename/preview/copy/share/checksum) |
 | OCR | Tesseract.js 6 (WASM worker); engine and language data are fetched from pinned CDNs on first use, then cached by the service worker |
 | Office | `docx`, patched SheetJS 0.20.3, `pptxgenjs`, JSZip |
 | HTML → PDF | html2canvas over DOMPurify-sanitised markup |
@@ -36,7 +40,7 @@ Production: <https://paperlypdf.netlify.app/>
 | Build | First load (gzip) | Notes |
 | --- | --- | --- |
 | Previous single-file bundle | **1,086 KB** | One inlined `index.html` (3.37 MB raw) duplicated into every prerendered route; 176 MB `dist` |
-| Current split build | **~131 KB** | Entry 118 KB + CSS 13.5 KB + preload helper 0.6 KB; PDF/Office/OCR engines load on demand; ~6.4 MB `dist` |
+| Enhanced split build | **~119 KB** | Entry 119 KB gzip (entry + CSS + preload helper); PDF/Office/OCR engines load on demand; ~6.9 MB `dist` |
 
 Heavy vendors are grouped per package (`vendor-pdfjs`, `vendor-pdf-lib`, `vendor-ocr`, `vendor-spreadsheet`, …) so a shared chunk never drags an unused engine into the first paint. Route pages and tool interfaces are lazy; a tool’s engine is only fetched when that tool is opened.
 
@@ -54,19 +58,26 @@ src/lib/redactPatterns.ts pattern presets, matching, Luhn/IBAN validation, repor
 src/lib/outline.ts       outline tree flattening, split ranges, heading detection, outline writing
 src/lib/tables.ts        table region/column detection, cell assembly, RFC-4180 CSV
 src/lib/toolRegistry.ts  single source of truth for all 51 tools (also parsed by the prerenderer)
+src/lib/job.ts           cancellable job runner (progress, ETA, retry, normalised errors)
+src/lib/prefs.ts         versioned, namespaced local settings with safe fallbacks
+src/lib/pageQuery.ts     page-range parser (odd/even/last/steps) used by every range field
+src/lib/output.ts         output naming, MIME, preview data, clipboard/share, SHA-256
+src/lib/sample.ts         locally generated sample PDF/scan/Markdown/CSV/HTML/text
+src/components/           shared UI: AdvancedOptions, PagePicker, OutputPreview, DownloadPanel
 src/tools/               tool implementations grouped by domain
 src/pages/               marketing, legal, help, guides, comparison and activity pages
 scripts/prerender.mjs    static SEO generation (titles, canonicals, OG, JSON-LD, sitemap, OG image)
 scripts/build-sw.mjs     offline service-worker/precache manifest generation
 scripts/serve-dist.cjs   production-parity QA server (applies netlify.toml CSP/security headers)
+docs/                    research, architecture, tool matrix and production-readiness docs
 tests/unit               Vitest + Testing Library (security, uploads, geometry, retrieval, patterns, outline, tables)
 tests/e2e                Playwright output-verification suites
 ```
 
 ## Testing
 
-- `tests/unit` — 220+ Vitest tests. `security.ts` is coverage-gated at 70%; text geometry, retrieval ranking, redaction patterns, outline math, table/CSV generation and app registry all have dedicated suites. A registry consistency test enforces 50 unique tools, valid related-tool links and **a renderer for every registered tool**.
-- `tests/e2e` — Playwright suites against a production-parity server (real CSP, gzip, prerendered routes). `matrix-a.spec.ts` and `matrix-b.spec.ts` exercise every registered tool with generated-output assertions (page counts, extracted text, form values, encryption, ZIP contents, image signatures, metadata, outline targets, CSV cells) plus malformed-input, malicious-archive, wrong-password and 120-page large-file cases. `power.spec.ts` covers the eight newest tools end-to-end plus the offline service worker. The full suite is **74 tests** (critical 8, matrix-a 25, matrix-b 26, power 12, mobile 2) and runs green in ~2 minutes against the production build.
+- `tests/unit` — 313 Vitest tests. `security.ts` is coverage-gated at 70%; text geometry, retrieval ranking, redaction patterns, outline math, table/CSV generation and app registry all have dedicated suites. A registry consistency test enforces 51 unique tools, valid related-tool links and **a renderer for every registered tool**.
+- `tests/e2e` — 76 Playwright tests against a production-parity server (real CSP, gzip, prerendered routes). `matrix-a.spec.ts` and `matrix-b.spec.ts` exercise every registered tool with generated-output assertions (page counts, extracted text, form values, encryption, ZIP contents, image signatures, metadata, outline targets, CSV cells) plus malformed-input, malicious-archive, wrong-password and 120-page large-file cases. `power.spec.ts` covers the eight newest tools end-to-end plus the offline service worker. The full suite is **76 tests** (critical 8, matrix-a 25, matrix-b 26, power 12, platform 3, mobile 2) and runs green in ~2 minutes against the production build. The platform suite verifies the shared result panel (sample → rename → preview → checksum → download name), the extended page-query syntax, and that all 51 tools mount with their advanced options open and **zero console errors**.
 - Every tool is verified by its **output**, not by whether a button rendered.
 
 ## Commands
@@ -84,6 +95,14 @@ npm run test:e2e         # Playwright (production-parity server, gzip + real hea
 npm run test:e2e:install # install the Chromium binary once
 node scripts/e2e-fixtures.cjs  # regenerate the synthetic PDF/DOCX fixtures
 ```
+
+## Documentation
+
+- [`docs/RESEARCH-AND-GAPS.md`](docs/RESEARCH-AND-GAPS.md) — competitor analysis, gap closure and what stays out of scope.
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — layers, engine contracts, tool anatomy, extension guide.
+- [`docs/TOOL-ENHANCEMENTS.md`](docs/TOOL-ENHANCEMENTS.md) — per-tool feature matrix for this release.
+- [`docs/PRODUCTION-READINESS.md`](docs/PRODUCTION-READINESS.md) — release gates, limits, security/privacy/a11y reviews, known limitations.
+- [`docs/PLAYBOOK.md`](docs/PLAYBOOK.md) — the shared-API contract used for future tool work.
 
 ## Security model
 
@@ -103,6 +122,8 @@ node scripts/e2e-fixtures.cjs  # regenerate the synthetic PDF/DOCX fixtures
 - **Fonts are bundled.** No request to Google Fonts or any other font CDN is made at runtime.
 - **Documents are never sent to an OCR service.** The only external requests, made when you use OCR, are the pinned Tesseract engine/core (`cdn.jsdelivr.net`) and the language data (`tessdata.projectnaptha.com`). Pages are rendered locally; only the engine files are downloaded, then cached by the service worker so offline OCR works after first use.
 - Activity history stores tool name, output filename, pages, size and timestamp under `paperly.activity.v1`; clear it from **Activity**.
+- Tool options are remembered under versioned `paperly.prefs.v1.*` keys (quality, layout, style only). **Activity → Reset settings** clears them all.
+- Saved signatures are **opt-in and off by default**; when enabled, up to six signature images stay in this browser’s local storage and can be forgotten individually or all at once. They are never uploaded.
 - The app works fully offline after the first visit: the service worker precaches the shell, every hashed asset, the PDF.js worker and the self-hosted fonts. Navigations fall back to the cached shell when the network is unavailable.
 
 ## Known, disclosed limitations

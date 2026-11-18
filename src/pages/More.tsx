@@ -21,6 +21,7 @@ import { Badge, Button, ToolTile } from "@/components/ui";
 import { ClosingCTA, PageHero, SectionHead } from "@/pages/Info";
 import { CATEGORIES, TOOLS, getTool, type Tool } from "@/lib/toolRegistry";
 import { clearActivity, formatWhen, removeActivity, useActivity, useFavorites } from "@/lib/activity";
+import { clearAllPreferences, listPreferenceScopes } from "@/lib/prefs";
 import { cn } from "@/utils/cn";
 
 /* ================================================================== *
@@ -412,6 +413,11 @@ export function GuidesPage({ initialGuide }: { initialGuide?: string }) {
 export function ActivityPage() {
   const activity = useActivity();
   const { favorites, toggle } = useFavorites();
+  const [remembered, setRemembered] = useState(0);
+
+  useEffect(() => {
+    setRemembered(listPreferenceScopes().length);
+  }, []);
 
   return (
     <div>
@@ -507,7 +513,29 @@ export function ActivityPage() {
             )}
           </div>
 
-          <div className="mt-8 flex items-start gap-2.5 rounded-2xl border border-forest/15 bg-lime/20 p-4 text-[12px] leading-relaxed text-forest">
+          <div className="mt-6 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-line bg-paper px-4 py-3">
+            <div className="min-w-0">
+              <p className="text-[12.5px] font-semibold">Remembered tool settings</p>
+              <p className="mt-0.5 text-[11.5px] leading-relaxed text-muted">
+                {remembered
+                  ? `${remembered} saved option group${remembered === 1 ? "" : "s"} (quality, layout, style). Removing them restores every default.`
+                  : "No tool options are saved yet. Choices you make stick for next time."}
+              </p>
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={!remembered}
+              onClick={() => {
+                clearAllPreferences();
+                setRemembered(0);
+              }}
+            >
+              Reset settings
+            </Button>
+          </div>
+
+          <div className="mt-6 flex items-start gap-2.5 rounded-2xl border border-forest/15 bg-lime/20 p-4 text-[12px] leading-relaxed text-forest">
             <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0" />
             <p>
               <strong>What is stored:</strong> tool name, output filename, page count, size and time — in this browser only.{" "}

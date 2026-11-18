@@ -11,7 +11,7 @@ import {
   type PDFObject,
 } from "@cantoo/pdf-lib";
 import { Check, Download, EyeOff, FileSearch, FileText, Redo2, Search, ShieldCheck, Trash2 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   baseName,
   dataUrlToBytes,
@@ -19,10 +19,15 @@ import {
   downloadBytes,
   openPdfJs,
   openPdfLib,
+  parseRanges,
   renderPdfPage,
   sanitizeName,
 } from "@/lib/pdf";
+import { extractPage } from "@/lib/extract";
 import { friendlyProcessingError } from "@/lib/security";
+import { describeJobTime, nextPaint, useJob } from "@/lib/job";
+import { useDownloadShortcut, usePrimaryShortcut } from "@/lib/hotkeys";
+import { useToolPreferences } from "@/lib/prefs";
 import {
   PATTERN_PRESETS,
   buildRegex,
@@ -37,7 +42,8 @@ import {
 import { boxToNormalized, charRangeBox, extractDocumentGeometry, type NormalizedBox, type TextLine } from "@/lib/textItems";
 import { useInitialFiles, usePdfFile } from "@/lib/usePdf";
 import { Alert, Badge, Button, ColorInput, Field, Progress, Select, Switch, inputClass } from "@/components/ui";
-import { DownloadPanel, SinglePdfInput } from "@/components/toolParts";
+import { AdvancedOptions, NumberField, OptionNote, OptionsGrid } from "@/components/AdvancedOptions";
+import { DownloadPanel, RangeField, SinglePdfInput } from "@/components/toolParts";
 import { cn } from "@/utils/cn";
 
 /* ================================================================== *
@@ -76,6 +82,22 @@ interface RedactResult {
   matchesRemoved: number;
   counts: Record<string, number>;
   pageCounts: { page: number; count: number }[];
+}
+
+interface VerificationOutcome {
+  pagesChecked: number;
+  valuesChecked: number;
+  /** Pages where redacted text could still be extracted. */
+  failedPages: number[];
+  passed: boolean;
+}
+
+/** Thrown between pages when the visitor cancels a scan or an apply. */
+class RedactCancelledError extends Error {
+  constructor() {
+    super("Cancelled.");
+    this.name = "RedactCancelledError";
+  }
 }
 
 /** Draw filled rectangles into the rendered page image. */
@@ -140,11 +162,17 @@ function MatchSnippet({ match }: { match: DetectedMatch }) {
 export function FindRedactTool() {
   const initial = useInitialFiles();
   const pdf = usePdfFile(initial);
-  const [enabledPresets, setEnabledPresets] = useState<Record<PatternId, boolean>>(defaultPresetToggles);
+  const opts = useToolPreferences("find-redact", {
+    presets: defaultPresetToggles(),
+    scanRange: "",
+    caseSensitive: false,
+    wholeWord: false,
+    minLength: 4,
+    color: "#000000",
+    dpi: 150,
+  });
+
   const [customPattern, setCustomPattern] = useState("");
-  const [caseSensitive, setCaseSensitive] = useState(false);
-  const [wholeWord, setWholeWord] = useState(false);
-  const [minLength, setMinLength] = useState(4);
   const [scanning, setScanning] = useState(false);
   const [scanProgress, setScanProgress] = useState(0);
   const [matches, setMatches] = useState<DetectedMatch[]>([]);
@@ -154,14 +182,39 @@ export function FindRedactTool() {
   const [previewPage, setPreviewPage] = useState(1);
   const [preview, setPreview] = useState<string | null>(null);
   const [previewBusy, setPreviewBusy] = useState(false);
-  const [color, setColor] = useState("#000000");
-  const [dpi, setDpi] = useState(150);
   const [busy, setBusy] = useState(false);
   const [applyProgress, setApplyProgress] = useState(0);
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
   const [result, setResult] = useState<RedactResult | null>(null);
+  const scanCancelRef = useRef(false);
+  const applyCancelRef = useRef(false);
+  const verifyJob = useJob<VerificationOutcome>();
+  const resetVerify = verifyJob.reset;
+
+  const enabledPresets = useMemo(
+    () => ({ ...defaultPresetToggles(), ...opts.value.presets }),
+    [opts.value.presets],
+  );
+  const caseSensitive = opts.value.caseSensitive;
+  const wholeWord = opts.value.wholeWord;
+  const minLength = opts.value.minLength;
+  const color = opts.value.color;
+  const dpi = opts.value.dpi;
+  const range = opts.value.scanRange;
 
   const pageLimit = Math.min(pdf.pageCount || 0, MAX_SCAN_PAGES);
+
+  const rangeInfo = useMemo(() => {
+    if (!pdf.pageCount) return { pages: [] as number[], error: "" };
+    try {
+      const pages = parseRanges(range, pdf.pageCount).slice(0, MAX_SCAN_PAGES);
+      return { pages, error: "" };
+    } catch (err) {
+      return { pages: [] as number[], error: (err as Error).message };
+    }
+  }, [range, pdf.pageCount]);
+
   const customError = useMemo(() => {
     if (!enabledPresets.custom || !customPattern.trim()) return "";
     try {
@@ -186,6 +239,28 @@ export function FindRedactTool() {
 
   const countsByPattern = useMemo(() => countByPattern(matches), [matches]);
   const previewMatches = matches.filter((match) => match.page === previewPage);
+  const selectedCount = selected.size;
+
+  const togglePreset = (id: PatternId) => opts.set("presets", { ...enabledPresets, [id]: !enabledPresets[id] });
+
+  const toggleMatch = (id: string) =>
+    setSelected((previous) => {
+      const next = new Set(previous);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+
+  const togglePageGroup = (group: { page: number; matches: DetectedMatch[] }) =>
+    setSelected((previous) => {
+      const next = new Set(previous);
+      const allIncluded = group.matches.every((match) => next.has(match.id));
+      for (const match of group.matches) {
+        if (allIncluded) next.delete(match.id);
+        else next.add(match.id);
+      }
+      return next;
+    });
 
   // A new file invalidates every previous scan and result.
   useEffect(() => {
@@ -197,9 +272,11 @@ export function FindRedactTool() {
     setPreviewPage(1);
     setResult(null);
     setError("");
+    setNotice("");
     setScanProgress(0);
     setApplyProgress(0);
-  }, [pdf.bytes]);
+    resetVerify();
+  }, [pdf.bytes, resetVerify]);
 
   // Render the current preview page (unrotated, exactly like the burned image).
   useEffect(() => {
@@ -230,25 +307,21 @@ export function FindRedactTool() {
     };
   }, [pdf.bytes, previewPage, scanned]);
 
-  const togglePreset = (id: PatternId) => setEnabledPresets((previous) => ({ ...previous, [id]: !previous[id] }));
-
-  const toggleMatch = (id: string) =>
-    setSelected((previous) => {
-      const next = new Set(previous);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-
   const scan = async () => {
     if (!pdf.bytes || !pdf.file || scanning || busy) return;
-    const activePresets: PatternPreset[] = PATTERN_PRESETS.filter(
-      (preset) => preset.id !== "custom" && enabledPresets[preset.id],
-    );
+    const activePresets: PatternPreset[] = PATTERN_PRESETS.filter((preset) => preset.id !== "custom" && enabledPresets[preset.id]);
     const customPreset = PATTERN_PRESETS.find((preset) => preset.id === "custom");
     if (enabledPresets.custom && customPreset) activePresets.push(customPreset);
     if (!activePresets.length) {
       setError("Choose at least one pattern to look for.");
+      return;
+    }
+    if (rangeInfo.error) {
+      setError(rangeInfo.error);
+      return;
+    }
+    if (!rangeInfo.pages.length) {
+      setError("Choose at least one page to search.");
       return;
     }
 
@@ -263,9 +336,12 @@ export function FindRedactTool() {
       return;
     }
 
+    scanCancelRef.current = false;
     setScanning(true);
     setError("");
+    setNotice("");
     setResult(null);
+    resetVerify();
     setMatches([]);
     setSelected(new Set());
     setScanned(false);
@@ -274,21 +350,26 @@ export function FindRedactTool() {
 
     const notes: string[] = [];
     try {
-      const pages = Array.from({ length: pageLimit }, (_, index) => index + 1);
-      if (pdf.pageCount > MAX_SCAN_PAGES) {
+      const pages = rangeInfo.pages;
+      if (!range.trim() && pdf.pageCount > MAX_SCAN_PAGES) {
         notes.push(
           `This PDF has ${pdf.pageCount} pages. Pattern scanning is capped at ${MAX_SCAN_PAGES} pages per run to keep your browser responsive, so only the first ${MAX_SCAN_PAGES} pages were searched. Split the file to cover the rest.`,
         );
+      }
+      if (range.trim() && pages.length === MAX_SCAN_PAGES && pdf.pageCount > MAX_SCAN_PAGES) {
+        notes.push(`Your page range was capped at ${MAX_SCAN_PAGES} pages for this run.`);
       }
       const geometry = await extractDocumentGeometry(pdf.bytes, {
         pages,
         onProgress: (done, total) => setScanProgress((done / Math.max(1, total)) * 70),
       });
+      if (scanCancelRef.current) throw new RedactCancelledError();
 
       const found: DetectedMatch[] = [];
       let truncated = false;
       let textCharacters = 0;
       for (let pageIndex = 0; pageIndex < geometry.pages.length && !truncated; pageIndex++) {
+        if (scanCancelRef.current) throw new RedactCancelledError();
         const page = geometry.pages[pageIndex];
         for (const line of page.lines) {
           textCharacters += line.text.length;
@@ -339,17 +420,55 @@ export function FindRedactTool() {
           "No text layer was found on the scanned pages. This looks like a scanned document — run OCR PDF first, then search it here.",
         );
       }
+      if (range.trim()) notes.push(`Searched pages ${pages.join(", ")} only.`);
       setMatches(found);
       setSelected(new Set(found.map((match) => match.id)));
       setScanNotes(notes);
       setScanned(true);
-      setPreviewPage(found[0]?.page ?? 1);
+      setPreviewPage(found[0]?.page ?? pages[0] ?? 1);
       setScanProgress(100);
     } catch (err) {
-      setError(friendlyProcessingError(err, "We couldn’t search this PDF. Try again with fewer pages."));
+      if (err instanceof RedactCancelledError) {
+        setNotice("Search cancelled — nothing was changed and the previous results were kept.");
+      } else {
+        setError(friendlyProcessingError(err, "We couldn’t search this PDF. Try again with fewer pages."));
+      }
     } finally {
       setScanning(false);
     }
+  };
+
+  /** Re-read the saved copy and prove the chosen values can no longer be extracted. */
+  const startVerification = (bytes: Uint8Array, pages: number[], values: string[]) => {
+    void verifyJob.run(async (reporter) => {
+      reporter.report(4, "Re-opening the redacted copy…");
+      const doc = await openPdfJs(bytes);
+      const failedPages = new Set<number>();
+      let pagesChecked = 0;
+      let valuesChecked = 0;
+      try {
+        for (let index = 0; index < pages.length; index++) {
+          reporter.throwIfCancelled();
+          const extracted = await extractPage(doc, pages[index]);
+          pagesChecked++;
+          for (const value of values) {
+            if (value.length < 3) continue;
+            if (extracted.text.includes(value)) failedPages.add(pages[index]);
+          }
+          valuesChecked = values.length;
+          reporter.step(index + 1, pages.length, `Checking page ${pages[index]} for the redacted text…`);
+          await nextPaint();
+        }
+      } finally {
+        await doc.destroy();
+      }
+      return {
+        pagesChecked,
+        valuesChecked,
+        failedPages: [...failedPages].sort((a, b) => a - b),
+        passed: failedPages.size === 0,
+      };
+    });
   };
 
   const applyRedactions = async () => {
@@ -359,9 +478,12 @@ export function FindRedactTool() {
       setError("Select at least one match to redact.");
       return;
     }
+    applyCancelRef.current = false;
     setBusy(true);
     setError("");
+    setNotice("");
     setResult(null);
+    resetVerify();
     setApplyProgress(0);
 
     const boxesByPage = new Map<number, NormalizedBox[]>();
@@ -373,67 +495,77 @@ export function FindRedactTool() {
       countsByPage.set(match.page, (countsByPage.get(match.page) ?? 0) + 1);
     }
 
+    let pdfjsDocument: Awaited<ReturnType<typeof openPdfJs>> | null = null;
     try {
       const source = await openPdfLib(pdf.bytes);
       const output = await PDFDocument.create();
-      const pdfjsDocument = await openPdfJs(pdf.bytes);
-      try {
-        const sourcePages = source.getPages();
-        for (let index = 0; index < sourcePages.length; index++) {
-          const boxes = boxesByPage.get(index + 1);
-          if (boxes?.length) {
-            const original = sourcePages[index];
-            const { width, height } = original.getSize();
-            const rendered = await renderPdfPage(pdfjsDocument, index + 1, {
-              scale: uploadPixelsToDpi(dpi),
-              type: "image/jpeg",
-              quality: 0.92,
-              rotation: 0,
-            });
-            const burned = await burnBoxesIntoImage(rendered.dataUrl, boxes, color);
-            const page = output.addPage([width, height]);
-            const rotation = original.getRotation().angle;
-            if (rotation) page.setRotation(degrees(rotation));
-            const image = await output.embedJpg(dataUrlToBytes(burned));
-            page.drawImage(image, { x: 0, y: 0, width, height });
-          } else {
-            const [copied] = await output.copyPages(source, [index]);
-            output.addPage(copied);
-          }
-          setApplyProgress(((index + 1) / sourcePages.length) * 92);
+      pdfjsDocument = await openPdfJs(pdf.bytes);
+      const sourcePages = source.getPages();
+      for (let index = 0; index < sourcePages.length; index++) {
+        if (applyCancelRef.current) throw new RedactCancelledError();
+        const boxes = boxesByPage.get(index + 1);
+        if (boxes?.length) {
+          const original = sourcePages[index];
+          const { width, height } = original.getSize();
+          const rendered = await renderPdfPage(pdfjsDocument, index + 1, {
+            scale: uploadPixelsToDpi(dpi),
+            type: "image/jpeg",
+            quality: 0.92,
+            rotation: 0,
+          });
+          const burned = await burnBoxesIntoImage(rendered.dataUrl, boxes, color);
+          const page = output.addPage([width, height]);
+          const rotation = original.getRotation().angle;
+          if (rotation) page.setRotation(degrees(rotation));
+          const image = await output.embedJpg(dataUrlToBytes(burned));
+          page.drawImage(image, { x: 0, y: 0, width, height });
+        } else {
+          const [copied] = await output.copyPages(source, [index]);
+          output.addPage(copied);
         }
-
-        const bytes = await output.save();
-        // Self-verify: the rebuilt file must load and keep every page before we offer it.
-        const verified = await openPdfLib(bytes);
-        if (verified.getPageCount() !== sourcePages.length) {
-          throw new Error(
-            "The rebuilt PDF didn’t keep every page, so nothing was offered for download. Try a different output resolution and apply again.",
-          );
-        }
-
-        const counts = countByPattern(chosen);
-        const pageCounts = [...countsByPage.entries()]
-          .sort((a, b) => a[0] - b[0])
-          .map(([page, count]) => ({ page, count }));
-        setResult({
-          bytes,
-          name: `${sanitizeName(baseName(pdf.file.name))}-redacted.pdf`,
-          sourceName: pdf.file.name,
-          totalPages: pdf.pageCount,
-          scannedPages: pageLimit,
-          redactedPages: [...boxesByPage.keys()].sort((a, b) => a - b),
-          matchesRemoved: chosen.length,
-          counts,
-          pageCounts,
-        });
-        setApplyProgress(100);
-      } finally {
-        await pdfjsDocument.destroy();
+        setApplyProgress(((index + 1) / sourcePages.length) * 92);
       }
+      if (applyCancelRef.current) throw new RedactCancelledError();
+
+      const bytes = await output.save();
+      // Self-verify: the rebuilt file must load and keep every page before we offer it.
+      const verified = await openPdfLib(bytes);
+      if (verified.getPageCount() !== sourcePages.length) {
+        throw new Error(
+          "The rebuilt PDF didn’t keep every page, so nothing was offered for download. Try a different output resolution and apply again.",
+        );
+      }
+
+      const counts = countByPattern(chosen);
+      const pageCounts = [...countsByPage.entries()]
+        .sort((a, b) => a[0] - b[0])
+        .map(([page, count]) => ({ page, count }));
+      const redactedPages = [...boxesByPage.keys()].sort((a, b) => a - b);
+      setResult({
+        bytes,
+        name: `${sanitizeName(baseName(pdf.file.name))}-redacted.pdf`,
+        sourceName: pdf.file.name,
+        totalPages: pdf.pageCount,
+        scannedPages: pageLimit,
+        redactedPages,
+        matchesRemoved: chosen.length,
+        counts,
+        pageCounts,
+      });
+      setApplyProgress(100);
+      startVerification(
+        bytes,
+        redactedPages,
+        chosen.map((match) => match.value),
+      );
     } catch (err) {
-      setError(friendlyProcessingError(err, "We couldn’t redact this PDF. Try a lower output resolution."));
+      if (err instanceof RedactCancelledError) {
+        setNotice("Redaction cancelled — the partially rebuilt copy was discarded and your original is untouched.");
+      } else {
+        setError(friendlyProcessingError(err, "We couldn’t redact this PDF. Try a lower output resolution."));
+      }
     } finally {
+      await pdfjsDocument?.destroy().catch(() => undefined);
       setBusy(false);
     }
   };
@@ -450,14 +582,35 @@ export function FindRedactTool() {
       pageCounts: result.pageCounts,
       generatedAt: new Date(),
     });
+    const verification = verifyJob.result;
+    const verificationText = verification
+      ? [
+          "",
+          "",
+          `Post-apply verification: ${verification.passed ? "PASS" : "FAIL"}`,
+          `Pages re-read: ${verification.pagesChecked}`,
+          verification.passed
+            ? `None of the ${verification.valuesChecked} redacted string${verification.valuesChecked === 1 ? "" : "s"} can still be extracted from the chosen pages.`
+            : `Redacted text could still be extracted on page${verification.failedPages.length === 1 ? "" : "s"} ${verification.failedPages.join(", ")}. Do not share this copy.`,
+          "Verification compares the claimed values against the extracted text of the saved bytes. It cannot detect a visual copy of the text inside an image.",
+        ].join("\n")
+      : "";
     downloadBytes(
-      new Uint8Array(new TextEncoder().encode(report)),
+      new Uint8Array(new TextEncoder().encode(`${report}${verificationText}`)),
       `${sanitizeName(baseName(result.sourceName))}-redaction-report.txt`,
       "text/plain",
     );
   };
 
-  const selectedCount = selected.size;
+  const downloadRedacted = () => {
+    if (!result) return;
+    downloadBytes(result.bytes, result.name);
+  };
+
+  const coveredPages = pageGroups.filter((group) => group.matches.some((match) => selected.has(match.id))).length;
+
+  usePrimaryShortcut(scan, Boolean(pdf.bytes) && !scanning && !busy);
+  useDownloadShortcut(downloadRedacted, Boolean(result));
 
   return (
     <div className="space-y-5">
@@ -471,7 +624,8 @@ export function FindRedactTool() {
             </p>
             <p className="mt-1 text-[11.5px] leading-relaxed text-ink/70">
               Selected pages are rebuilt as images with the match boxes burned into the pixels, so the text underneath is genuinely gone. Pages with no
-              selected matches are copied unchanged and keep their selectable text. Nothing is uploaded — the search and the rebuild happen in this tab.
+              selected matches are copied unchanged and keep their selectable text. Nothing is uploaded — the search, the rebuild and the verification
+              all happen in this tab.
             </p>
           </div>
 
@@ -508,64 +662,119 @@ export function FindRedactTool() {
                 <Field
                   label="Custom regular expression"
                   htmlFor="custom-redact-pattern"
-                  hint="JavaScript syntax, e.g. EMP-\\d{6}. Case-insensitive unless you choose otherwise."
+                  hint="JavaScript syntax, e.g. EMP-\d{6}. Case-insensitive unless you choose otherwise."
                 >
                   <input
                     id="custom-redact-pattern"
                     value={customPattern}
                     onChange={(event) => setCustomPattern(event.target.value)}
-                    placeholder="EMP-\\d{6}"
-                    className={inputClass}
+                    placeholder="EMP-\d{6}"
+                    className={cn(inputClass, customError && "border-clay/50 focus:border-clay focus:ring-clay/10")}
                     autoComplete="off"
                     spellCheck={false}
+                    aria-invalid={Boolean(customError)}
+                    aria-describedby={customError ? "custom-redact-error" : undefined}
                   />
                 </Field>
-                {customError && <p className="mt-1 text-[11.5px] font-medium text-clay-ink">{customError}</p>}
+                {customPattern.trim() && !customError && (
+                  <p className="mt-1 flex items-center gap-1 text-[11.5px] font-medium text-forest">
+                    <Check className="h-3.5 w-3.5" /> That pattern compiles and is ready to search.
+                  </p>
+                )}
+                {customError && (
+                  <p id="custom-redact-error" role="alert" className="mt-1 text-[11.5px] font-medium text-clay-ink">
+                    {customError}
+                  </p>
+                )}
               </div>
             )}
 
-            <div className="mt-3 grid gap-2 sm:grid-cols-2">
-              <Switch
-                checked={caseSensitive}
-                onChange={setCaseSensitive}
-                label="Case sensitive"
-                description="Off by default so JANE@EXAMPLE.COM is still found."
-              />
-              <Switch
-                checked={wholeWord}
-                onChange={setWholeWord}
-                label="Whole words only"
-                description="Skips matches glued to surrounding letters."
+            <div className="mt-3">
+              <RangeField
+                value={range}
+                onChange={(value) => opts.set("scanRange", value)}
+                total={pdf.pageCount}
+                label="Pages to search"
+                hint="Leave empty for every page. Pattern scanning is capped at 300 pages per run."
               />
             </div>
 
-            <div className="mt-3 grid gap-2 sm:grid-cols-2">
-              <Field label="Minimum match length" hint="Shorter hits are ignored to reduce noise.">
-                <Select value={minLength} onChange={(event) => setMinLength(Number(event.target.value))}>
-                  {[3, 4, 6, 8, 10, 12, 16].map((value) => (
-                    <option key={value} value={value}>
-                      {value} characters
-                    </option>
-                  ))}
-                </Select>
-              </Field>
-              <div className="flex items-end">
-                <Button onClick={scan} loading={scanning} disabled={Boolean(customError) || scanning || busy}>
-                  <Search className="h-4 w-4" /> Find matches
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <Button onClick={scan} loading={scanning} disabled={Boolean(customError) || scanning || busy || Boolean(rangeInfo.error)}>
+                <Search className="h-4 w-4" /> Find matches
+              </Button>
+              {scanning && (
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    scanCancelRef.current = true;
+                  }}
+                >
+                  Cancel
                 </Button>
-              </div>
+              )}
+              <span className="text-[11.5px] text-muted">
+                {rangeInfo.error ? "Fix the page range to search." : `${rangeInfo.pages.length} page${rangeInfo.pages.length === 1 ? "" : "s"} in scope`}
+              </span>
             </div>
           </div>
 
-          {pdf.pageCount > MAX_SCAN_PAGES && (
+          <AdvancedOptions scope="find-redact" badge="5 controls" description="Matching rules and the look of the redacted output" onReset={opts.reset}>
+            <OptionsGrid>
+              <NumberField
+                label="Minimum match length"
+                value={minLength}
+                onChange={(value) => opts.set("minLength", value)}
+                min={3}
+                max={40}
+                suffix="chars"
+                hint="Shorter hits are ignored to reduce noise."
+              />
+              <Field label="Output resolution" hint="Higher keeps legible text around the redactions; files get larger.">
+                <Select value={dpi} onChange={(event) => opts.set("dpi", Number(event.target.value))}>
+                  <option value={110}>Standard · 110 DPI</option>
+                  <option value={150}>High · 150 DPI</option>
+                  <option value={220}>Print · 220 DPI</option>
+                  <option value={300}>Maximum · 300 DPI</option>
+                </Select>
+              </Field>
+              <div className="flex items-end">
+                <Switch
+                  checked={caseSensitive}
+                  onChange={(value) => opts.set("caseSensitive", value)}
+                  label="Case sensitive"
+                  description="Off by default so JANE@EXAMPLE.COM is still found."
+                />
+              </div>
+              <div className="flex items-end">
+                <Switch
+                  checked={wholeWord}
+                  onChange={(value) => opts.set("wholeWord", value)}
+                  label="Whole words only"
+                  description="Skips matches glued to surrounding letters."
+                />
+              </div>
+              <Field label="Box colour" hint="Filled into the pixels, so the redaction is visible as well as destructive.">
+                <ColorInput value={color} onChange={(value) => opts.set("color", value)} label="Redaction box colour" />
+              </Field>
+            </OptionsGrid>
+            <div className="mt-3">
+              <OptionNote>
+                Your patterns, page range and output settings are remembered on this device. Matched values are never stored.
+              </OptionNote>
+            </div>
+          </AdvancedOptions>
+
+          {pdf.pageCount > MAX_SCAN_PAGES && !range.trim() && (
             <Alert tone="warning" title="Large document">
               This PDF has {pdf.pageCount} pages. Pattern scanning is capped at {MAX_SCAN_PAGES} pages per run, so only the first {MAX_SCAN_PAGES}{" "}
-              pages will be searched. Split the file to redact the rest.
+              pages will be searched. Split the file to redact the rest, or set a page range.
             </Alert>
           )}
 
-          {scanning && <Progress value={scanProgress} label="Reading the text layer and matching patterns…" />}
+          {scanning && <Progress value={scanProgress} label={scanProgress < 70 ? "Reading the text layer…" : "Matching patterns…"} />}
           {error && <Alert tone="error">{error}</Alert>}
+          {notice && <Alert tone="info">{notice}</Alert>}
 
           {scanned && !matches.length && (
             <Alert tone="info" title="No matches found">
@@ -612,73 +821,91 @@ export function FindRedactTool() {
                   </div>
 
                   <div className="max-h-[520px] space-y-3 overflow-y-auto rounded-xl border border-line bg-bone-deep/20 p-2 scrollbar-thin">
-                    {pageGroups.map((group) => (
-                      <div key={group.page} className="overflow-hidden rounded-lg border border-line bg-paper">
-                        <button
-                          type="button"
-                          onClick={() => setPreviewPage(group.page)}
-                          className={cn(
-                            "flex w-full items-center justify-between gap-2 border-b border-line px-3 py-2 text-left transition-colors",
-                            previewPage === group.page ? "bg-lime/25" : "bg-bone-deep/40 hover:bg-bone-deep/60",
-                          )}
-                        >
-                          <span className="flex items-center gap-1.5 text-[12px] font-semibold">
-                            <FileSearch className="h-3.5 w-3.5 text-forest" /> Page {group.page}
-                          </span>
-                          <span className="text-[10.5px] font-medium text-muted">
-                            {group.matches.length} match{group.matches.length === 1 ? "" : "es"}
-                          </span>
-                        </button>
-                        <ul className="divide-y divide-line/70">
-                          {group.matches.map((match) => (
-                            <li key={match.id} className="flex items-start gap-2.5 px-3 py-2">
+                    {pageGroups.map((group) => {
+                      const includedOnPage = group.matches.filter((match) => selected.has(match.id)).length;
+                      return (
+                        <div key={group.page} className="overflow-hidden rounded-lg border border-line bg-paper">
+                          <div className="flex w-full items-center justify-between gap-2 border-b border-line bg-bone-deep/40 px-3 py-2">
+                            <button
+                              type="button"
+                              onClick={() => setPreviewPage(group.page)}
+                              className={cn(
+                                "flex min-w-0 items-center gap-1.5 text-left text-[12px] font-semibold transition-colors",
+                                previewPage === group.page ? "text-forest" : "text-ink/80 hover:text-forest",
+                              )}
+                            >
+                              <FileSearch className="h-3.5 w-3.5 shrink-0 text-forest" /> Page {group.page}
+                            </button>
+                            <div className="flex shrink-0 items-center gap-1.5">
+                              <span className="text-[10.5px] font-medium text-muted">
+                                {includedOnPage}/{group.matches.length} selected
+                              </span>
                               <input
                                 type="checkbox"
-                                className="mt-0.5 h-4 w-4 shrink-0 accent-forest"
-                                checked={selected.has(match.id)}
-                                onChange={() => toggleMatch(match.id)}
-                                aria-label={`Include ${match.label} on page ${match.page}`}
+                                className="h-4 w-4 accent-forest"
+                                checked={includedOnPage === group.matches.length}
+                                onChange={() => togglePageGroup(group)}
+                                aria-label={`Toggle all matches for page ${group.page}`}
                               />
-                              <label className="min-w-0 flex-1 cursor-pointer" onClick={() => setPreviewPage(match.page)}>
-                                <span className="mb-0.5 flex items-center gap-1.5">
-                                  <span className="rounded border border-clay/20 bg-clay/[0.07] px-1.5 py-0.5 text-[9.5px] font-semibold uppercase tracking-[0.06em] text-clay-ink">
-                                    {match.label}
+                            </div>
+                          </div>
+                          <ul className="divide-y divide-line/70">
+                            {group.matches.map((match) => (
+                              <li key={match.id} className="flex items-start gap-2.5 px-3 py-2">
+                                <input
+                                  type="checkbox"
+                                  className="mt-0.5 h-4 w-4 shrink-0 accent-forest"
+                                  checked={selected.has(match.id)}
+                                  onChange={() => toggleMatch(match.id)}
+                                  aria-label={`Include ${match.label} on page ${match.page}`}
+                                />
+                                <label className="min-w-0 flex-1 cursor-pointer" onClick={() => setPreviewPage(match.page)}>
+                                  <span className="mb-0.5 flex items-center gap-1.5">
+                                    <span className="rounded border border-clay/20 bg-clay/[0.07] px-1.5 py-0.5 text-[9.5px] font-semibold uppercase tracking-[0.06em] text-clay-ink">
+                                      {match.label}
+                                    </span>
+                                    <span className="text-[10px] text-muted">column {match.startInLine}</span>
                                   </span>
-                                </span>
-                                <MatchSnippet match={match} />
-                              </label>
-                            </li>
-                          ))}
-                        </ul>
-                      </div>
-                    ))}
+                                  <MatchSnippet match={match} />
+                                </label>
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      );
+                    })}
                   </div>
 
                   <div className="mt-3 rounded-xl border border-line bg-paper p-3.5">
-                    <p className="mb-2 text-[11px] font-semibold uppercase tracking-[0.09em] text-ink/75">Redaction output</p>
-                    <div className="grid gap-3 sm:grid-cols-2">
-                      <Field label="Box colour">
-                        <ColorInput value={color} onChange={setColor} label="Redaction box colour" />
-                      </Field>
-                      <Field label="Output resolution" hint="Higher keeps legible text around the redactions; files get larger.">
-                        <Select value={dpi} onChange={(event) => setDpi(Number(event.target.value))}>
-                          <option value={110}>Standard · 110 DPI</option>
-                          <option value={150}>High · 150 DPI</option>
-                          <option value={220}>Print · 220 DPI</option>
-                          <option value={300}>Maximum · 300 DPI</option>
-                        </Select>
-                      </Field>
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <p className="text-[11px] font-semibold uppercase tracking-[0.09em] text-ink/75">Redaction output</p>
+                      <span className="text-[10.5px] text-muted">
+                        {dpi} DPI · boxes {color}
+                      </span>
                     </div>
                     <div className="mt-3 flex flex-wrap items-center gap-2">
                       <Button onClick={applyRedactions} loading={busy} disabled={!selectedCount || busy || scanning}>
                         <EyeOff className="h-4 w-4" /> Apply {selectedCount} redaction{selectedCount === 1 ? "" : "s"}
                       </Button>
+                      {busy && (
+                        <Button
+                          variant="outline"
+                          onClick={() => {
+                            applyCancelRef.current = true;
+                          }}
+                        >
+                          Cancel
+                        </Button>
+                      )}
                       <span className="text-[11.5px] text-muted">
-                        {pageGroups.filter((group) => group.matches.some((match) => selected.has(match.id))).length} page
-                        {pageGroups.filter((group) => group.matches.some((match) => selected.has(match.id))).length === 1 ? "" : "s"} will be flattened
+                        {coveredPages} page{coveredPages === 1 ? "" : "s"} will be flattened
                       </span>
                     </div>
-                    {busy && <div className="mt-3"><Progress value={applyProgress} label="Rasterising pages and burning the boxes into the image…" /></div>}
+                    {busy && (
+                      <div className="mt-3">
+                        <Progress value={applyProgress} label="Rasterising pages and burning the boxes into the image…" />
+                      </div>
+                    )}
                   </div>
                 </div>
 
@@ -747,8 +974,8 @@ export function FindRedactTool() {
                       <ShieldCheck className="h-3.5 w-3.5" /> Verify before sharing
                     </p>
                     <p className="mt-1">
-                      Open the download and try to select the redacted text: flattened pages have no extractable text at all. Always keep the unredacted original
-                      in a safe place.
+                      After saving, Paperly re-reads the flattened pages and confirms the redacted text can no longer be extracted. Always keep the
+                      unredacted original in a safe place.
                     </p>
                   </div>
                 </aside>
@@ -771,11 +998,57 @@ export function FindRedactTool() {
                   result.totalPages - result.redactedPages.length === 1 ? "" : "s"
                 } kept with selectable text`}
               />
+
+              <div className="rounded-xl border border-line bg-paper p-3.5">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <p className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.09em] text-ink/75">
+                    <ShieldCheck className="h-3.5 w-3.5 text-forest" /> Post-apply verification
+                  </p>
+                  {verifyJob.succeeded && verifyJob.result && (
+                    <Badge tone={verifyJob.result.passed ? "forest" : "clay"}>{verifyJob.result.passed ? "Passed" : "Failed"}</Badge>
+                  )}
+                </div>
+                {verifyJob.busy && (
+                  <div className="mt-2">
+                    <Progress value={verifyJob.percent ?? undefined} label={verifyJob.label} etaMs={verifyJob.etaMs} detail={describeJobTime(verifyJob)} />
+                  </div>
+                )}
+                {verifyJob.status === "cancelled" && <p className="mt-1.5 text-[11.5px] text-muted">Verification was cancelled — the copy was still produced.</p>}
+                {verifyJob.failed && (
+                  <Alert tone="error" title="Verification couldn’t run">
+                    {verifyJob.error}
+                  </Alert>
+                )}
+                {verifyJob.succeeded && verifyJob.result && (
+                  <div className="mt-1.5 text-[11.5px] leading-relaxed">
+                    {verifyJob.result.passed ? (
+                      <p className="text-forest">
+                        <Check className="mr-1 inline h-3.5 w-3.5" />
+                        Re-read {verifyJob.result.pagesChecked} flattened page{verifyJob.result.pagesChecked === 1 ? "" : "s"}: none of the{" "}
+                        {verifyJob.result.valuesChecked} selected string{verifyJob.result.valuesChecked === 1 ? "" : "s"} can be extracted any more.
+                      </p>
+                    ) : (
+                      <p className="text-clay-ink">
+                        Redacted text could still be extracted on page{verifyJob.result.failedPages.length === 1 ? "" : "s"}{" "}
+                        {verifyJob.result.failedPages.join(", ")}. Do not share this copy — try a higher output resolution and apply again.
+                      </p>
+                    )}
+                    <p className="mt-1 text-[10.5px] text-muted">
+                      Verification compares the selected values against the extracted text of the saved bytes. It cannot detect text that was already
+                      rasterised inside a scan.
+                    </p>
+                  </div>
+                )}
+                {!verifyJob.busy && verifyJob.status === "idle" && (
+                  <p className="mt-1.5 text-[11.5px] text-muted">Verification did not run for this copy.</p>
+                )}
+              </div>
+
               <div className="flex flex-wrap items-center gap-2 rounded-xl border border-line bg-paper p-3">
                 <Button variant="outline" size="sm" onClick={downloadRedactionReport}>
                   <Download className="h-3.5 w-3.5" /> Download redaction report (.txt)
                 </Button>
-                <span className="text-[11.5px] text-muted">Counts by pattern and page — never the matched values.</span>
+                <span className="text-[11.5px] text-muted">Counts by pattern and page, the verification result — never the matched values.</span>
               </div>
             </div>
           )}
@@ -784,7 +1057,6 @@ export function FindRedactTool() {
     </div>
   );
 }
-
 /* ================================================================== *
  * SANITIZE PDF — low-level removal of metadata and active content
  * ================================================================== */
@@ -792,11 +1064,13 @@ type SanitizeGroupId =
   | "scripts"
   | "attachments"
   | "metadata"
+  | "xmp"
   | "annotations"
   | "forms"
   | "layers"
   | "thumbnails"
-  | "signatures";
+  | "signatures"
+  | "links";
 
 interface SanitizeGroupSpec {
   id: SanitizeGroupId;
@@ -808,42 +1082,52 @@ const SANITIZE_GROUPS: readonly SanitizeGroupSpec[] = [
   {
     id: "scripts",
     label: "JavaScript & automatic actions",
-    description: "OpenAction, additional-actions dictionaries (AA), document JavaScript and AcroForm actions.",
+    description: "Document JavaScript, /OpenAction, additional-actions dictionaries (AA) and AcroForm actions. These can run code when a viewer opens or interacts with the file.",
   },
   {
     id: "attachments",
     label: "Embedded files & attachments",
-    description: "Files attached inside the PDF, found through the EmbeddedFiles name tree.",
+    description: "Files attached inside the PDF, found through the EmbeddedFiles name tree. Attachments carry their own content and metadata.",
   },
   {
     id: "metadata",
     label: "Document metadata",
-    description: "Info dictionary entries (title, author, producer…) and the XMP metadata packet.",
+    description: "Info dictionary entries — title, author, subject, keywords, creator, producer and the created/modified timestamps.",
+  },
+  {
+    id: "xmp",
+    label: "XMP metadata packet",
+    description: "The XML metadata store Adobe tools and archival workflows read. It often duplicates (or contradicts) the Info dictionary.",
   },
   {
     id: "annotations",
     label: "Annotations & comments",
-    description: "Sticky notes, markups, links and other annotations drawn on pages.",
+    description: "Sticky notes, markups, highlights and free text drawn on pages. Form widgets are handled by the form-field switch.",
   },
   {
     id: "forms",
     label: "Form fields (AcroForm)",
-    description: "Field definitions, their values, widget annotations and XFA data.",
+    description: "Field definitions, their typed values, widget annotations and an XFA form bundle.",
   },
   {
     id: "layers",
     label: "Optional content (hidden layers)",
-    description: "Layer definitions and the default visibility configuration.",
+    description: "Layer definitions and the default visibility configuration. Removing it can reveal previously hidden content.",
   },
   {
     id: "thumbnails",
     label: "Page thumbnails",
-    description: "Embedded preview images attached to page objects.",
+    description: "Embedded preview images attached to page objects — an older rendition of the page content.",
   },
   {
     id: "signatures",
     label: "Signature fields",
-    description: "Signature fields, their signature dictionaries and catalog signature permissions.",
+    description: "Signature fields, their signature dictionaries and catalog signature permissions (/Perms).",
+  },
+  {
+    id: "links",
+    label: "External links (URI actions)",
+    description: "Link annotations and actions that point at a URL, so an opened file cannot silently call home.",
   },
 ];
 
@@ -853,11 +1137,13 @@ const DEFAULT_SANITIZE_OPTIONS: SanitizeOptions = {
   scripts: true,
   attachments: true,
   metadata: true,
+  xmp: true,
   annotations: true,
   forms: true,
   layers: true,
   thumbnails: true,
   signatures: true,
+  links: true,
 };
 
 interface SanitizeFinding {
@@ -868,6 +1154,16 @@ interface SanitizeFinding {
   details: string[];
 }
 
+/** Before/after counts per structure, produced by re-reading the saved copy. */
+interface SanitizeVerification {
+  id: SanitizeGroupId;
+  label: string;
+  before: number;
+  remaining: number;
+  selected: boolean;
+  ok: boolean;
+}
+
 interface SanitizeResult {
   bytes: Uint8Array;
   name: string;
@@ -876,6 +1172,9 @@ interface SanitizeResult {
   findings: SanitizeFinding[];
   foundTotal: number;
   removedTotal: number;
+  verification: SanitizeVerification[];
+  verified: boolean;
+  nothingFound: boolean;
 }
 
 interface FormInventoryEntry {
@@ -1062,6 +1361,163 @@ const detailLine = (details: string[], line: string) => {
   if (line.trim()) details.push(line);
 };
 
+interface StructureCount {
+  count: number;
+  details: string[];
+}
+
+/**
+ * Count every removable structure the sanitiser knows about. Used twice: once
+ * before deletion and once on the re-read output, so the report can say exactly
+ * what was there and what survived.
+ */
+function countSanitizeStructures(doc: PDFDocument): Record<SanitizeGroupId, StructureCount> {
+  const context = doc.context;
+  const catalog = doc.catalog;
+  const counts = {} as Record<SanitizeGroupId, StructureCount>;
+  for (const group of SANITIZE_GROUPS) counts[group.id] = { count: 0, details: [] };
+  const pages = (() => {
+    try {
+      return doc.getPages();
+    } catch {
+      return [];
+    }
+  })();
+
+  {
+    let count = 0;
+    const details: string[] = [];
+    const jsTree = catalog.Names()?.get(PDFName.of("JavaScript"));
+    if (jsTree !== undefined) {
+      const scripts = countNameTree(context, jsTree);
+      if (scripts) {
+        count += scripts;
+        details.push(`${scripts} document JavaScript action${scripts === 1 ? "" : "s"}`);
+      }
+    }
+    if (catalog.has(PDFName.of("OpenAction"))) {
+      count++;
+      details.push("catalog open action");
+    }
+    if (catalog.has(PDFName.of("AA"))) {
+      count++;
+      details.push("catalog additional actions");
+    }
+    const acro = catalog.AcroForm();
+    if (acro?.has(PDFName.of("AA"))) {
+      count++;
+      details.push("AcroForm additional actions");
+    }
+    let pageActions = 0;
+    for (const page of pages) if (page.node.has(PDFName.of("AA"))) pageActions++;
+    if (pageActions) {
+      count += pageActions;
+      details.push(`${pageActions} page action dictionar${pageActions === 1 ? "y" : "ies"}`);
+    }
+    counts.scripts = { count, details };
+  }
+
+  {
+    const root = catalog.Names()?.get(PDFName.of("EmbeddedFiles"));
+    const count = root !== undefined ? countNameTree(context, root) : 0;
+    counts.attachments = { count, details: count ? [`${count} embedded file${count === 1 ? "" : "s"}`] : [] };
+  }
+
+  {
+    const info = lookupDict(context, context.trailerInfo.Info);
+    const keys = info ? info.keys().map((key) => key.asString().replace(/^\//, "")) : [];
+    counts.metadata = {
+      count: keys.length,
+      details: keys.length ? [`Info dictionary keys: ${keys.slice(0, 12).join(", ")}${keys.length > 12 ? "…" : ""}`] : [],
+    };
+  }
+
+  {
+    const present = catalog.get(PDFName.of("Metadata")) !== undefined;
+    counts.xmp = { count: present ? 1 : 0, details: present ? ["XMP metadata packet"] : [] };
+  }
+
+  {
+    let count = 0;
+    for (const page of pages) count += page.node.Annots()?.size() ?? 0;
+    counts.annotations = { count, details: count ? [`${count} annotation${count === 1 ? "" : "s"}`] : [] };
+  }
+
+  {
+    // Read the raw /Fields array: never call getForm(), which would create an
+    // empty AcroForm in a file that has none and change the saved copy.
+    const acro = catalog.AcroForm();
+    const fieldArray = acro ? lookupArray(context, acro.get(PDFName.of("Fields"))) : undefined;
+    const fieldCount = fieldArray?.size() ?? 0;
+    const hasXfa = Boolean(acro?.has(PDFName.of("XFA")));
+    const details: string[] = [];
+    if (fieldCount) details.push(`${fieldCount} interactive field${fieldCount === 1 ? "" : "s"}`);
+    if (hasXfa) details.push("XFA form bundle");
+    counts.forms = { count: Math.max(fieldCount, acro ? 1 : 0), details };
+  }
+
+  {
+    const ocProperties = catalog.get(PDFName.of("OCProperties"));
+    let ocgs = 0;
+    if (ocProperties !== undefined) {
+      const dict = lookupDict(context, ocProperties);
+      const list = dict ? lookupArray(context, dict.get(PDFName.of("OCGs"))) : undefined;
+      ocgs = list?.size() ?? 0;
+    }
+    const count = ocgs || (ocProperties !== undefined ? 1 : 0);
+    counts.layers = { count, details: count ? [`${ocgs || 1} optional content group${ocgs === 1 ? "" : "s"}`] : [] };
+  }
+
+  {
+    let count = 0;
+    for (const page of pages) if (page.node.has(PDFName.of("Thumb"))) count++;
+    counts.thumbnails = { count, details: count ? [`${count} page thumbnail${count === 1 ? "" : "s"}`] : [] };
+  }
+
+  {
+    let sigFields = 0;
+    const acro = catalog.AcroForm();
+    const fields = acro ? lookupArray(context, acro.get(PDFName.of("Fields"))) : undefined;
+    if (fields) {
+      for (let index = 0; index < fields.size(); index++) {
+        const dict = lookupDict(context, fields.get(index));
+        const type = dict?.get(PDFName.of("FT"));
+        if (type instanceof PDFName && type.asString() === "/Sig") sigFields++;
+      }
+    }
+    const perms = catalog.get(PDFName.of("Perms")) !== undefined;
+    const count = sigFields + (perms ? 1 : 0);
+    const details: string[] = [];
+    if (sigFields) details.push(`${sigFields} signature field${sigFields === 1 ? "" : "s"}`);
+    if (perms) details.push("signature permissions dictionary");
+    counts.signatures = { count, details };
+  }
+
+  {
+    let count = 0;
+    const details: string[] = [];
+    for (const page of pages) {
+      const annots = page.node.Annots();
+      if (!annots) continue;
+      for (let index = 0; index < annots.size(); index++) {
+        const dict = lookupDict(context, annots.get(index));
+        if (!dict) continue;
+        const action = lookupDict(context, dict.get(PDFName.of("A")));
+        const type = action?.get(PDFName.of("S"));
+        if (!(type instanceof PDFName)) continue;
+        const name = type.asString();
+        if (name !== "/URI" && name !== "/Launch") continue;
+        count++;
+        const uri = decodePdfText(action?.get(PDFName.of("URI")));
+        if (uri && details.length < 6) details.push(`link to ${uri.slice(0, 60)}`);
+      }
+    }
+    counts.links = { count, details };
+  }
+
+  return counts;
+}
+
 /**
  * Remove the selected document-level structures, save, then reload the saved
  * bytes and confirm every selected structure is genuinely absent.
@@ -1083,6 +1539,7 @@ async function sanitizePdf(
   await pause(8);
 
   // Inventory everything before the first deletion.
+  const before = countSanitizeStructures(doc);
   const acroDict = catalog.AcroForm();
   const formEntries = inventoryForm(doc, acroDict);
   const signatureEntries = formEntries.filter((entry) => entry.type === "/Sig");
@@ -1187,26 +1644,29 @@ async function sanitizePdf(
   const infoObject = context.trailerInfo.Info;
   const infoDict = lookupDict(context, infoObject);
   const infoKeys = infoDict ? infoDict.keys().map((key) => key.asString().replace(/^\//, "")) : [];
-  const xmpObject = catalog.get(PDFName.of("Metadata"));
-  const metadataFound = (infoKeys.length ? 1 : 0) + (xmpObject !== undefined ? 1 : 0);
+  const metadataFound = infoKeys.length ? 1 : 0;
   const metadataDetails: string[] = [];
   if (infoKeys.length) {
     detailLine(metadataDetails, `Info dictionary keys: ${infoKeys.slice(0, 12).join(", ")}${infoKeys.length > 12 ? "…" : ""}`);
   }
-  if (xmpObject !== undefined) detailLine(metadataDetails, "XMP metadata packet");
-  if (options.metadata && metadataFound) {
-    if (infoObject !== undefined) {
-      if (infoDict) for (const key of infoDict.keys()) infoDict.delete(key);
-      delete context.trailerInfo.Info;
-      deleteGraph(context, infoObject);
-    }
-    if (xmpObject !== undefined) {
-      catalog.delete(PDFName.of("Metadata"));
-      deleteGraph(context, xmpObject);
-    }
+  if (options.metadata && infoObject !== undefined) {
+    if (infoDict) for (const key of infoDict.keys()) infoDict.delete(key);
+    delete context.trailerInfo.Info;
+    deleteGraph(context, infoObject);
   }
   addFinding("metadata", metadataFound, options.metadata ? metadataFound : 0, metadataDetails);
   await pause(40);
+
+  /* ------------------------------- xmp ------------------------------- */
+  const xmpObject = catalog.get(PDFName.of("Metadata"));
+  const xmpDetails: string[] = [];
+  if (xmpObject !== undefined) detailLine(xmpDetails, "XMP metadata packet");
+  if (options.xmp && xmpObject !== undefined) {
+    catalog.delete(PDFName.of("Metadata"));
+    deleteGraph(context, xmpObject);
+  }
+  addFinding("xmp", xmpObject !== undefined ? 1 : 0, options.xmp && xmpObject !== undefined ? 1 : 0, xmpDetails);
+  await pause(44);
 
   /* --------------------------- signatures ---------------------------- */
   const signatureDetails: string[] = [];
@@ -1353,6 +1813,32 @@ async function sanitizePdf(
   );
   await pause(84);
 
+  /* ------------------------------- links ------------------------------ */
+  const linkDetails: string[] = [];
+  let linksRemoved = 0;
+  for (const page of doc.getPages()) {
+    const annots = page.node.Annots();
+    if (!annots) continue;
+    for (let index = annots.size() - 1; index >= 0; index--) {
+      const item = annots.get(index);
+      const dict = lookupDict(context, item);
+      if (!dict) continue;
+      const actionObject = dict.get(PDFName.of("A"));
+      const action = lookupDict(context, actionObject);
+      const type = action?.get(PDFName.of("S"));
+      if (!(type instanceof PDFName) || (type.asString() !== "/URI" && type.asString() !== "/Launch")) continue;
+      linksRemoved++;
+      const uri = decodePdfText(action?.get(PDFName.of("URI")));
+      detailLine(linkDetails, uri ? `link to ${uri.slice(0, 60)}` : "link action");
+      if (options.links) {
+        dict.delete(PDFName.of("A"));
+        deleteGraph(context, actionObject);
+      }
+    }
+  }
+  addFinding("links", linksRemoved, options.links ? linksRemoved : 0, linkDetails);
+  await pause(88);
+
   const saved = await doc.save();
   await pause(92);
 
@@ -1362,11 +1848,36 @@ async function sanitizePdf(
       `The sanitized copy didn’t pass verification: ${problems.slice(0, 4).join(", ")}${problems.length > 4 ? "…" : ""}. Nothing was offered for download.`,
     );
   }
+
+  const after = countSanitizeStructures(await openPdfLib(saved));
+  const verification: SanitizeVerification[] = SANITIZE_GROUPS.map((group) => {
+    const beforeCount = before[group.id].count;
+    const remaining = after[group.id].count;
+    const selected = options[group.id];
+    return {
+      id: group.id,
+      label: group.label,
+      before: beforeCount,
+      remaining,
+      selected,
+      ok: selected ? remaining === 0 : true,
+    };
+  });
   await pause(100);
 
   const foundTotal = findings.reduce((sum, finding) => sum + finding.found, 0);
   const removedTotal = findings.reduce((sum, finding) => sum + finding.removed, 0);
-  return { bytes: saved, totalPages: doc.getPageCount(), findings, foundTotal, removedTotal };
+  const nothingFound = findings.filter((finding) => options[finding.id]).every((finding) => finding.found === 0);
+  return {
+    bytes: saved,
+    totalPages: doc.getPageCount(),
+    findings,
+    foundTotal,
+    removedTotal,
+    verification,
+    verified: problems.length === 0,
+    nothingFound,
+  };
 }
 
 /** Reload the saved bytes and confirm each selected structure is absent. */
@@ -1396,9 +1907,24 @@ async function verifySanitized(bytes: Uint8Array, options: SanitizeOptions): Pro
     }
   }
 
-  if (options.metadata) {
-    if (catalog.get(PDFName.of("Metadata")) !== undefined) issues.push("XMP metadata");
-    if (context.trailerInfo.Info !== undefined) issues.push("an Info dictionary");
+  if (options.metadata && context.trailerInfo.Info !== undefined) issues.push("an Info dictionary");
+  if (options.xmp && catalog.get(PDFName.of("Metadata")) !== undefined) issues.push("an XMP metadata packet");
+
+  if (options.links) {
+    for (const page of doc.getPages()) {
+      const annots = page.node.Annots();
+      if (!annots) continue;
+      for (let index = 0; index < annots.size(); index++) {
+        const dict = lookupDict(context, annots.get(index));
+        const action = dict ? lookupDict(context, dict.get(PDFName.of("A"))) : undefined;
+        const type = action?.get(PDFName.of("S"));
+        if (type instanceof PDFName && (type.asString() === "/URI" || type.asString() === "/Launch")) {
+          issues.push("external link actions");
+          break;
+        }
+      }
+      if (issues.includes("external link actions")) break;
+    }
   }
 
   for (const page of doc.getPages()) {
@@ -1456,13 +1982,23 @@ function formatSanitizeReport(result: SanitizeResult): string {
     `Pages: ${result.totalPages}`,
     `Structures found: ${result.foundTotal}`,
     `Structures removed: ${result.removedTotal}`,
-    "Verification: the saved copy was reloaded and every selected structure was confirmed absent.",
+    result.nothingFound
+      ? "Verification: none of the selected structures were present, so the copy differs from the original only by a re-save."
+      : "Verification: the saved copy was reloaded and every selected structure was confirmed absent.",
     "",
     "Details:",
   ];
   for (const finding of result.findings) {
     lines.push(`- ${finding.label}: found ${finding.found}, removed ${finding.removed}`);
     for (const detail of finding.details) lines.push(`    ${detail}`);
+  }
+  lines.push("", "Verification — what was found before, what remains after:");
+  for (const row of result.verification) {
+    lines.push(
+      `- ${row.label}: ${row.before} before, ${row.remaining} remaining (${row.selected ? "selected for removal" : "left in place"})${
+        row.selected && row.remaining > 0 ? " — FAILED" : ""
+      }`,
+    );
   }
   lines.push(
     "",
@@ -1475,11 +2011,14 @@ function formatSanitizeReport(result: SanitizeResult): string {
 export function SanitizeTool() {
   const initial = useInitialFiles();
   const pdf = usePdfFile(initial);
-  const [options, setOptions] = useState<SanitizeOptions>(DEFAULT_SANITIZE_OPTIONS);
+  const prefs = useToolPreferences("sanitize", { groups: DEFAULT_SANITIZE_OPTIONS });
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState(0);
   const [error, setError] = useState("");
   const [result, setResult] = useState<SanitizeResult | null>(null);
+
+  // Normalise the persisted bag over the current defaults so new groups appear.
+  const options = useMemo(() => ({ ...DEFAULT_SANITIZE_OPTIONS, ...prefs.value.groups }), [prefs.value.groups]);
 
   useEffect(() => {
     setResult(null);
@@ -1487,7 +2026,8 @@ export function SanitizeTool() {
     setProgress(0);
   }, [pdf.bytes]);
 
-  const setOption = (id: SanitizeGroupId, value: boolean) => setOptions((previous) => ({ ...previous, [id]: value }));
+  const setOption = (id: SanitizeGroupId, value: boolean) => prefs.set("groups", { ...options, [id]: value });
+  const setAll = (value: boolean) => prefs.set("groups", Object.fromEntries(SANITIZE_GROUPS.map((group) => [group.id, value])) as SanitizeOptions);
   const enabledCount = SANITIZE_GROUPS.filter((group) => options[group.id]).length;
 
   const sanitize = async () => {
@@ -1523,6 +2063,14 @@ export function SanitizeTool() {
     );
   };
 
+  const downloadSanitized = () => {
+    if (!result) return;
+    downloadBytes(result.bytes, result.name);
+  };
+
+  usePrimaryShortcut(() => void sanitize(), Boolean(pdf.bytes) && !busy && enabledCount > 0);
+  useDownloadShortcut(downloadSanitized, Boolean(result));
+
   const presentCount = result?.findings.filter((finding) => finding.found > 0).length ?? 0;
 
   return (
@@ -1546,18 +2094,10 @@ export function SanitizeTool() {
             <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
               <p className="text-[11px] font-semibold uppercase tracking-[0.09em] text-ink/75">What to remove</p>
               <div className="flex items-center gap-1">
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => setOptions(Object.fromEntries(SANITIZE_GROUPS.map((group) => [group.id, true])) as SanitizeOptions)}
-                >
+                <Button variant="ghost" size="sm" onClick={() => setAll(true)}>
                   Enable all
                 </Button>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => setOptions(Object.fromEntries(SANITIZE_GROUPS.map((group) => [group.id, false])) as SanitizeOptions)}
-                >
+                <Button variant="ghost" size="sm" onClick={() => setAll(false)}>
                   Disable all
                 </Button>
               </div>
@@ -1573,6 +2113,9 @@ export function SanitizeTool() {
                 />
               ))}
             </div>
+            <p className="mt-2 text-[11px] leading-relaxed text-muted">
+              {enabledCount} of {SANITIZE_GROUPS.length} structure groups selected. Your choice is remembered on this device.
+            </p>
           </div>
 
           <Alert tone="warning" title="Signatures can’t survive this">
@@ -1589,7 +2132,7 @@ export function SanitizeTool() {
             <Button onClick={sanitize} loading={busy} disabled={busy || enabledCount === 0}>
               <Trash2 className="h-4 w-4" /> Remove {enabledCount} selected structure{enabledCount === 1 ? "" : "s"}
             </Button>
-            <span className="text-[11.5px] text-muted">Saves a new copy — your original file is untouched.</span>
+            <span className="text-[11.5px] text-muted">Saves a new copy — your original file is untouched. ⌘/Ctrl+Enter runs this.</span>
           </div>
           {busy && <Progress value={progress} label="Removing structures, saving the copy and verifying it…" />}
           {error && <Alert tone="error">{error}</Alert>}
@@ -1608,13 +2151,20 @@ export function SanitizeTool() {
                 } · the saved copy was reloaded and checked before download`}
               />
 
+              {result.nothingFound && (
+                <Alert tone="info" title="Nothing found to remove">
+                  None of the selected structures are present in this file, so the copy differs from the original only by a re-save. Try the broader groups
+                  (metadata, annotations, scripts) or inspect the file first to see what it actually contains.
+                </Alert>
+              )}
+
               <div className="overflow-hidden rounded-xl border border-line bg-paper">
-                <div className="flex items-center justify-between border-b border-line bg-bone-deep/40 px-3.5 py-2">
+                <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line bg-bone-deep/40 px-3.5 py-2">
                   <p className="flex items-center gap-1.5 text-[12px] font-semibold">
                     <FileSearch className="h-3.5 w-3.5 text-forest" /> What Paperly found and removed
                   </p>
-                  <Badge tone="forest">
-                    <Check className="h-3 w-3" /> Verified
+                  <Badge tone={result.verified ? "forest" : "clay"}>
+                    <Check className="h-3 w-3" /> {result.verified ? "Verified" : "Review"}
                   </Badge>
                 </div>
                 <ul className="divide-y divide-line/70">
@@ -1647,6 +2197,32 @@ export function SanitizeTool() {
                     </li>
                   ))}
                 </ul>
+              </div>
+
+              <div className="overflow-hidden rounded-xl border border-line bg-paper">
+                <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line bg-bone-deep/40 px-3.5 py-2">
+                  <p className="text-[12px] font-semibold">Verification report</p>
+                  <span className="text-[10.5px] text-muted">Found before · removed by the sanitiser · remaining after</span>
+                </div>
+                <ul className="divide-y divide-line/70">
+                  {result.verification
+                    .filter((row) => row.before > 0 || row.remaining > 0)
+                    .map((row) => (
+                      <li key={row.id} className="flex flex-wrap items-center justify-between gap-2 px-3.5 py-2">
+                        <span className="text-[11.5px] font-medium text-ink/80">{row.label}</span>
+                        <span className="flex items-center gap-1.5">
+                          <Badge tone="neutral">{row.before} before</Badge>
+                          <Badge tone={row.selected ? "forest" : "clay"}>{row.selected ? "selected" : "kept (off)"}</Badge>
+                          <Badge tone={row.remaining === 0 ? "forest" : row.selected ? "clay" : "neutral"}>
+                            {row.remaining === 0 ? "0 remaining" : `${row.remaining} remaining`}
+                          </Badge>
+                        </span>
+                      </li>
+                    ))}
+                </ul>
+                {result.verification.every((row) => row.before === 0 && row.remaining === 0) && (
+                  <p className="px-3.5 py-2 text-[11.5px] text-muted">No removable structures were found in this file.</p>
+                )}
               </div>
 
               <div className="flex flex-wrap items-center gap-2 rounded-xl border border-line bg-paper p-3">
