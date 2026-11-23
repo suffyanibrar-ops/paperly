@@ -19,12 +19,17 @@ import {
   Maximize2,
   Minus,
   Move,
+  Pencil,
   Plus,
   Redo2,
   SendToBack,
   Signature,
   Square,
   Stamp,
+  StickyNote,
+  Strikethrough,
+  TextSearch,
+  Underline,
   TextAlignCenter,
   TextAlignEnd,
   TextAlignStart,
@@ -413,7 +418,9 @@ export function SignatureStudio({
 /* ------------------------------------------------------------------ *
  * EDIT PDF
  * ------------------------------------------------------------------ */
-type ElType = "text" | "rect" | "ellipse" | "line" | "arrow" | "highlight" | "whiteout" | "image" | "signature";
+type ElType = "text" | "rect" | "ellipse" | "line" | "arrow" | "highlight" | "whiteout" | "image" | "signature" | "pen" | "marker" | "note";
+type ElFont = "helvetica" | "times" | "courier";
+type TextRun = { id: string; text: string; x: number; y: number; w: number; h: number; fontSize: number; fontFamily: ElFont };
 type ElAlign = "left" | "center" | "right";
 
 interface El {
@@ -431,6 +438,13 @@ interface El {
   italic: boolean;
   align: ElAlign;
   text: string;
+  fontFamily: ElFont;
+  lineHeight: number;
+  rotation: number;
+  background: string | null;
+  underline: boolean;
+  strikethrough: boolean;
+  points?: { x: number; y: number }[];
   image?: string;
   /** Shapes only: fill the shape, or draw its outline. */
   fill: boolean;
@@ -452,6 +466,15 @@ const PALETTE: { id: ElType | "select"; label: string; icon: typeof Move }[] = [
   { id: "arrow", label: "Arrow", icon: ArrowUpRight },
   { id: "highlight", label: "Highlight", icon: Highlighter },
   { id: "whiteout", label: "Whiteout", icon: Eraser },
+  { id: "pen", label: "Draw", icon: Pencil },
+  { id: "marker", label: "Marker", icon: Highlighter },
+  { id: "note", label: "Note", icon: StickyNote },
+];
+
+const FONT_OPTIONS: { value: ElFont; label: string; css: string }[] = [
+  { value: "helvetica", label: "Helvetica (sans)", css: "Helvetica, Arial, sans-serif" },
+  { value: "times", label: "Times (serif)", css: '"Times New Roman", Times, serif' },
+  { value: "courier", label: "Courier (mono)", css: '"Courier New", Courier, monospace' },
 ];
 
 const ALIGN_OPTIONS: { id: ElAlign; label: string; icon: typeof Move }[] = [
@@ -478,6 +501,11 @@ export function EditPdfTool() {
     italic: false,
     align: "left" as ElAlign,
     textOpacity: 1,
+    fontFamily: "helvetica" as ElFont,
+    lineHeight: 1.28,
+    rotation: 0,
+    textBackground: false,
+    textBackgroundColor: "#ffffff",
     shapeColor: "#1c4c3b",
     shapeOpacity: 0.15,
     shapeFill: true,
@@ -495,8 +523,12 @@ export function EditPdfTool() {
   const [signatureSource, setSignatureSource] = useState<{ dataUrl: string; aspect: number } | null>(null);
   const [signatureOpen, setSignatureOpen] = useState(false);
   const [zoom, setZoom] = useState<number | "fit">("fit");
-  const [fitWidth, setFitWidth] = useState(720);
+  const [fitWidth, setFitWidth] = useState(() => (typeof window === "undefined" ? 320 : Math.max(160, Math.min(720, window.innerWidth - 48))));
   const [error, setError] = useState("");
+  const [replaceMode, setReplaceMode] = useState(false);
+  const [replaceLoading, setReplaceLoading] = useState(false);
+  const [textRuns, setTextRuns] = useState<TextRun[]>([]);
+  const [draftPoints, setDraftPoints] = useState<{ x: number; y: number }[]>([]);
   const [history, setHistory] = useState<{ past: El[][]; future: El[][] }>({ past: [], future: [] });
   const job = useJob<EditResult>();
   const viewportRef = useRef<HTMLDivElement>(null);
@@ -512,6 +544,7 @@ export function EditPdfTool() {
     startY: number;
     orig: El;
   } | null>(null);
+  const drawingRef = useRef<{ points: { x: number; y: number }[] } | null>(null);
 
   const currentDims = dims[pageIndex] ?? { width: 612, height: 792 };
   const pageW = currentDims.width;
@@ -562,6 +595,11 @@ export function EditPdfTool() {
   }, [pdf.bytes, pageIndex]);
 
   useEffect(() => {
+    setReplaceMode(false);
+    setTextRuns([]);
+  }, [pageIndex]);
+
+  useEffect(() => {
     const node = viewportRef.current;
     if (!node) return;
     const observer = new ResizeObserver((entries) => setFitWidth(Math.max(160, entries[0].contentRect.width)));
@@ -605,12 +643,141 @@ export function EditPdfTool() {
       italic: prefs.value.italic,
       align: prefs.value.align,
       text: "",
+      fontFamily: prefs.value.fontFamily,
+      lineHeight: prefs.value.lineHeight,
+      rotation: prefs.value.rotation,
+      background: prefs.value.textBackground ? prefs.value.textBackgroundColor : null,
+      underline: false,
+      strikethrough: false,
       fill: prefs.value.shapeFill,
       strokeWidth: prefs.value.strokeWidth,
       ...partial,
     };
     setElements((els) => [...els, element]);
     setSelectedId(element.id);
+    setActiveTool("select");
+    job.reset();
+  };
+
+  const toggleReplaceMode = async () => {
+    if (replaceMode) {
+      setReplaceMode(false);
+      setTextRuns([]);
+      return;
+    }
+    if (!pdf.bytes) return;
+    setReplaceLoading(true);
+    setError("");
+    try {
+      const doc = await openPdfJs(pdf.bytes);
+      const page = await doc.getPage(pageIndex + 1);
+      const content = await page.getTextContent();
+      const styles = (content.styles ?? {}) as Record<string, { fontFamily?: string }>;
+      const items = content.items
+        .filter((item): item is (typeof content.items)[number] & { str: string; transform: number[]; width: number; height: number; fontName?: string } => "str" in item && typeof item.str === "string" && item.str.trim().length > 0)
+        .map((item) => {
+          const transform = item.transform as number[];
+          const fontFamily = styles[item.fontName ?? ""]?.fontFamily ?? "";
+          const size = Math.abs(transform[3]) || item.height || 10;
+          return {
+            text: item.str.replace(/\s+/g, " ").trim(),
+            x: transform[4],
+            baseline: transform[5],
+            right: transform[4] + (item.width || 0),
+            size,
+            family: /times|serif/i.test(fontFamily) ? "times" as ElFont : /courier|mono/i.test(fontFamily) ? "courier" as ElFont : "helvetica" as ElFont,
+            rotated: Math.abs(transform[1]) > 0.5 || transform[0] <= 0,
+          };
+        })
+        .filter((item) => !item.rotated && item.text);
+      const groups = new Map<number, typeof items>();
+      for (const item of items) {
+        const key = Math.round(item.baseline / Math.max(2, item.size * 0.55));
+        const list = groups.get(key) ?? [];
+        list.push(item);
+        groups.set(key, list);
+      }
+      const runs: TextRun[] = [];
+      for (const group of groups.values()) {
+        group.sort((a, b) => a.x - b.x);
+        const largest = Math.max(...group.map((item) => item.size));
+        const baseline = Math.max(...group.map((item) => item.baseline));
+        const minX = Math.min(...group.map((item) => item.x));
+        const maxRight = Math.max(...group.map((item) => item.right));
+        runs.push({
+          id: uid(),
+          text: group.map((item) => item.text).join(" "),
+          x: minX,
+          y: Math.max(0, pageH - baseline - largest * 0.82),
+          w: Math.max(8, maxRight - minX),
+          h: Math.max(6, largest * 1.35),
+          fontSize: Math.max(6, Math.round(largest * 10) / 10),
+          fontFamily: group[0].family,
+        });
+      }
+      await doc.destroy().catch(() => undefined);
+      if (!runs.length) {
+        setError("No selectable text layer was found on this page. Run OCR PDF first, or use text boxes instead.");
+        return;
+      }
+      runs.sort((a, b) => a.y - b.y || a.x - b.x);
+      setTextRuns(runs);
+      setReplaceMode(true);
+      setSelectedId(null);
+      setActiveTool("select");
+    } catch (err) {
+      setError(friendlyProcessingError(err, "The text layer couldn’t be read on this page."));
+    } finally {
+      setReplaceLoading(false);
+    }
+  };
+
+  const applyReplacement = (run: TextRun) => {
+    snapshot();
+    const whiteout: El = {
+      id: uid(),
+      page: pageIndex,
+      type: "whiteout",
+      x: Math.max(0, run.x - 1),
+      y: Math.max(0, run.y - 1),
+      w: run.w + 2,
+      h: run.h + 2,
+      color: prefs.value.textBackgroundColor,
+      opacity: 1,
+      fontSize: run.fontSize,
+      bold: false,
+      italic: false,
+      align: "left",
+      text: "",
+      fontFamily: run.fontFamily,
+      lineHeight: 1.15,
+      rotation: 0,
+      background: null,
+      underline: false,
+      strikethrough: false,
+      fill: true,
+      strokeWidth: 0.5,
+    };
+    const replacement: El = {
+      ...whiteout,
+      id: uid(),
+      type: "text",
+      text: run.text,
+      x: run.x,
+      y: run.y,
+      w: run.w + 10,
+      h: run.h,
+      color: prefs.value.color,
+      opacity: 1,
+      fontSize: run.fontSize,
+      fontFamily: run.fontFamily,
+      lineHeight: 1.15,
+      background: null,
+    };
+    setElements((els) => [...els, whiteout, replacement]);
+    setSelectedId(replacement.id);
+    setReplaceMode(false);
+    setTextRuns([]);
     setActiveTool("select");
     job.reset();
   };
@@ -624,6 +791,14 @@ export function EditPdfTool() {
     const rect = surfaceRef.current.getBoundingClientRect();
     const x = clamp(((e.clientX - rect.left) / rect.width) * pageW, 0, pageW);
     const y = clamp(((e.clientY - rect.top) / rect.height) * pageH, 0, pageH);
+    if (activeTool === "pen" || activeTool === "marker") {
+      e.preventDefault();
+      (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
+      drawingRef.current = { points: [{ x, y }] };
+      setDraftPoints([{ x, y }]);
+      setSelectedId(null);
+      return;
+    }
     if (activeTool === "text") {
       addEl({
         type: "text",
@@ -651,6 +826,20 @@ export function EditPdfTool() {
       addEl({ type: "highlight", x: x - 80, y: y - 12, w: 180, h: 26, color: "#f6e05e", opacity: 0.42 });
     } else if (activeTool === "whiteout") {
       addEl({ type: "whiteout", x: x - 70, y: y - 16, w: 150, h: 34, color: "#ffffff", opacity: 1 });
+    } else if (activeTool === "note") {
+      addEl({
+        type: "note",
+        x,
+        y,
+        w: 170,
+        h: 74,
+        text: "Add a note",
+        color: "#3d3512",
+        opacity: 1,
+        fontSize: 10,
+        fill: true,
+        strokeWidth: 0.8,
+      });
     } else if (activeTool === "image") {
       if (!imageSource) {
         replaceTarget.current = null;
@@ -702,6 +891,60 @@ export function EditPdfTool() {
       window.removeEventListener("pointerup", onUp);
     };
   }, [pageW, pageH, prefs.value.lockAspect]);
+
+  useEffect(() => {
+    if (activeTool !== "pen" && activeTool !== "marker") return;
+    const pointFrom = (event: PointerEvent) => {
+      const node = surfaceRef.current;
+      if (!node) return null;
+      const rect = node.getBoundingClientRect();
+      return {
+        x: clamp(((event.clientX - rect.left) / rect.width) * pageW, 0, pageW),
+        y: clamp(((event.clientY - rect.top) / rect.height) * pageH, 0, pageH),
+      };
+    };
+    const move = (event: PointerEvent) => {
+      const drawing = drawingRef.current;
+      const point = pointFrom(event);
+      if (!drawing || !point) return;
+      const last = drawing.points[drawing.points.length - 1];
+      if (Math.hypot(point.x - last.x, point.y - last.y) < Math.max(0.7, pageW / 900)) return;
+      drawing.points.push(point);
+      setDraftPoints([...drawing.points]);
+    };
+    const finish = () => {
+      const drawing = drawingRef.current;
+      drawingRef.current = null;
+      setDraftPoints([]);
+      if (!drawing || !drawing.points.length) return;
+      const points = drawing.points.length === 1 ? [drawing.points[0], { x: drawing.points[0].x + 0.5, y: drawing.points[0].y + 0.5 }] : drawing.points;
+      const minX = Math.min(...points.map((point) => point.x));
+      const minY = Math.min(...points.map((point) => point.y));
+      const maxX = Math.max(...points.map((point) => point.x));
+      const maxY = Math.max(...points.map((point) => point.y));
+      addEl({
+        type: activeTool,
+        x: minX,
+        y: minY,
+        w: Math.max(2, maxX - minX),
+        h: Math.max(2, maxY - minY),
+        points,
+        color: prefs.value.shapeColor,
+        opacity: activeTool === "marker" ? Math.min(0.55, Math.max(0.18, prefs.value.shapeOpacity)) : 1,
+        strokeWidth: activeTool === "marker" ? Math.max(6, prefs.value.strokeWidth * 3) : Math.max(0.8, prefs.value.strokeWidth),
+        fill: false,
+      });
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", finish);
+    window.addEventListener("pointercancel", finish);
+    return () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", finish);
+      window.removeEventListener("pointercancel", finish);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTool, pageW, pageH, prefs.value.shapeColor, prefs.value.shapeOpacity, prefs.value.strokeWidth]);
 
   const duplicate = (id: string) => {
     const source = elementsRef.current.find((el) => el.id === id);
@@ -818,9 +1061,22 @@ export function EditPdfTool() {
     setError("");
     await job.run(async ({ report, step, throwIfCancelled }) => {
       const doc = await openPdfLib(source);
-      const fonts = await embedFonts(doc);
       const allPages = doc.getPages();
       const imageCache = new Map<string, Awaited<ReturnType<typeof doc.embedPng>>>();
+      const fontCache = new Map<string, Awaited<ReturnType<typeof doc.embedFont>>>();
+      const standardFor = (family: ElFont, bold: boolean, italic: boolean) => {
+        if (family === "times") return bold ? (italic ? StandardFonts.TimesRomanBoldItalic : StandardFonts.TimesRomanBold) : italic ? StandardFonts.TimesRomanItalic : StandardFonts.TimesRoman;
+        if (family === "courier") return bold ? (italic ? StandardFonts.CourierBoldOblique : StandardFonts.CourierBold) : italic ? StandardFonts.CourierOblique : StandardFonts.Courier;
+        return bold ? (italic ? StandardFonts.HelveticaBoldOblique : StandardFonts.HelveticaBold) : italic ? StandardFonts.HelveticaOblique : StandardFonts.Helvetica;
+      };
+      const fontFor = async (el: El) => {
+        const key = `${el.fontFamily}:${el.bold}:${el.italic}`;
+        const cached = fontCache.get(key);
+        if (cached) return cached;
+        const embedded = await doc.embedFont(standardFor(el.fontFamily, el.bold, el.italic));
+        fontCache.set(key, embedded);
+        return embedded;
+      };
       const total = elements.length;
       for (let index = 0; index < total; index++) {
         throwIfCancelled();
@@ -839,25 +1095,60 @@ export function EditPdfTool() {
               page.drawImage(embedded, { x: el.x, y: pageHeight - el.y - el.h, width: el.w, height: el.h, opacity: el.opacity });
             }
           } else if (el.type === "text") {
-            const font = el.italic ? (el.bold ? fonts.boldItalic : fonts.italic) : el.bold ? fonts.bold : fonts.regular;
+            const font = await fontFor(el);
+            if (el.background) {
+              page.drawRectangle({ x: el.x, y, width: el.w, height: el.h, color: hexToRgb(el.background), opacity: 1 });
+            }
             const lines = wrapText(el.text || " ", {
               font,
               size: el.fontSize,
               color: el.color,
               maxWidth: Math.max(30, el.w),
             });
+            const lineHeight = Math.max(0.8, el.lineHeight) * el.fontSize;
             lines.forEach((line, lineIndex) => {
               const lineWidth = font.widthOfTextAtSize(line, el.fontSize);
               const offset = el.align === "center" ? (el.w - lineWidth) / 2 : el.align === "right" ? el.w - lineWidth : 0;
+              const x = el.x + Math.max(0, offset);
+              const baseline = pageHeight - el.y - el.fontSize - lineIndex * lineHeight;
               page.drawText(line, {
-                x: el.x + Math.max(0, offset),
-                y: pageHeight - el.y - el.fontSize - lineIndex * el.fontSize * 1.28,
+                x,
+                y: baseline,
                 size: el.fontSize,
                 font,
                 color: hexToRgb(el.color),
                 opacity: el.opacity,
+                rotate: degrees(el.rotation),
               });
+              if (el.underline || el.strikethrough) {
+                const thickness = Math.max(0.5, el.fontSize * 0.055);
+                if (el.underline) {
+                  page.drawLine({ start: { x, y: baseline - el.fontSize * 0.12 }, end: { x: x + lineWidth, y: baseline - el.fontSize * 0.12 }, thickness, color: hexToRgb(el.color), opacity: el.opacity });
+                }
+                if (el.strikethrough) {
+                  page.drawLine({ start: { x, y: baseline + el.fontSize * 0.3 }, end: { x: x + lineWidth, y: baseline + el.fontSize * 0.3 }, thickness, color: hexToRgb(el.color), opacity: el.opacity });
+                }
+              }
             });
+          } else if (el.type === "note") {
+            page.drawRectangle({ x: el.x, y, width: el.w, height: el.h, color: rgb(1, 0.94, 0.55), borderColor: rgb(0.72, 0.58, 0.12), borderWidth: 0.8, opacity: 1 });
+            const font = await fontFor(el);
+            const lines = wrapText(el.text || "Note", { font, size: Math.min(10, el.fontSize), color: el.color, maxWidth: Math.max(30, el.w - 12) });
+            lines.slice(0, Math.max(1, Math.floor((el.h - 8) / 12))).forEach((line, lineIndex) => {
+              page.drawText(line, { x: el.x + 6, y: pageHeight - el.y - 14 - lineIndex * 12, size: Math.min(10, el.fontSize), font, color: rgb(0.18, 0.16, 0.08), opacity: 1 });
+            });
+          } else if (el.type === "pen" || el.type === "marker") {
+            const points = el.points ?? [];
+            for (let p = 1; p < points.length; p++) {
+              page.drawLine({
+                start: { x: points[p - 1].x, y: pageHeight - points[p - 1].y },
+                end: { x: points[p].x, y: pageHeight - points[p].y },
+                thickness: Math.max(0.6, el.strokeWidth),
+                color: hexToRgb(el.color),
+                opacity: el.opacity,
+                lineCap: 1,
+              });
+            }
           } else if (el.type === "rect" || el.type === "highlight" || el.type === "whiteout") {
             const outlined = !el.fill && el.type === "rect";
             page.drawRectangle({
@@ -1053,6 +1344,21 @@ export function EditPdfTool() {
               <span className="hidden sm:inline">{tool.label}</span>
             </button>
           ))}
+          <button
+            type="button"
+            onClick={() => void toggleReplaceMode()}
+            disabled={replaceLoading || !pdf.bytes}
+            aria-pressed={replaceMode}
+            aria-label="Replace existing text"
+            className={cn(
+              "flex min-h-10 items-center gap-1.5 rounded-lg px-2.5 text-[11.5px] font-medium transition-colors",
+              replaceMode ? "bg-clay text-white" : "text-ink/70 hover:bg-paper hover:text-ink",
+            )}
+            title="Cover and replace a line of existing text"
+          >
+            <TextSearch className="h-3.5 w-3.5" />
+            <span className="hidden sm:inline">{replaceLoading ? "Reading text…" : replaceMode ? "Pick a line" : "Replace text"}</span>
+          </button>
         </div>
         <div className="flex flex-wrap items-center gap-1">
           <Button variant="ghost" size="sm" onClick={undo} disabled={!canUndo} title="Undo (Ctrl+Z)" aria-label="Undo">
@@ -1184,7 +1490,7 @@ export function EditPdfTool() {
         </div>
       </div>
 
-      <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_260px]">
+      <div className="grid min-w-0 gap-4 lg:grid-cols-[minmax(0,1fr)_260px]">
         <div>
           <div className="mb-2 flex items-center justify-between gap-2">
             <p className="text-[11.5px] text-muted">{hint}</p>
@@ -1194,9 +1500,14 @@ export function EditPdfTool() {
               </button>
             )}
           </div>
+          {replaceMode && (
+            <div className="mb-2 rounded-lg border border-clay/25 bg-clay/10 px-3 py-2 text-[11px] leading-relaxed text-clay-ink">
+              <strong className="font-semibold">Cover &amp; replace.</strong> Pick a highlighted line. Paperly places a background box over it and writes editable text on top. This is not in-place text editing, and the original text remains underneath — use <a href="/redact-pdf" className="font-semibold underline">Redact PDF</a> when content must be destroyed.
+            </div>
+          )}
           <div className="rounded-xl border border-line bg-bone-deep/50 p-3 sm:p-5">
             <div ref={viewportRef} className={cn("w-full", zoom !== "fit" && displayWidth > fitWidth && "overflow-x-auto pb-1")}>
-              <div className="mx-auto" style={{ width: `${displayWidth}px`, maxWidth: zoom === "fit" ? "100%" : undefined }}>
+              <div className="mx-auto min-w-0" style={{ width: zoom === "fit" ? "100%" : `${displayWidth}px` }}>
                 <div
                   ref={surfaceRef}
                   onPointerDown={placeFromClick}
@@ -1204,6 +1515,7 @@ export function EditPdfTool() {
                     "relative w-full overflow-hidden rounded-sm bg-white pdf-page-shadow",
                     activeTool !== "select" && "cursor-crosshair",
                     activeTool === "select" && "cursor-default",
+                    (activeTool === "pen" || activeTool === "marker") && "touch-none",
                   )}
                   style={{ aspectRatio: `${pageW} / ${pageH}` }}
                 >
@@ -1239,15 +1551,37 @@ export function EditPdfTool() {
                           className="h-full w-full overflow-hidden whitespace-pre-wrap break-words"
                           style={{
                             color: el.color,
+                            background: el.background ?? undefined,
                             fontSize: el.fontSize * scale,
-                            lineHeight: 1.28,
+                            lineHeight: el.lineHeight,
+                            fontFamily: FONT_OPTIONS.find((font) => font.value === el.fontFamily)?.css,
                             fontWeight: el.bold ? 700 : 400,
                             fontStyle: el.italic ? "italic" : "normal",
                             textAlign: el.align,
+                            textDecorationLine: [el.underline ? "underline" : "", el.strikethrough ? "line-through" : ""].filter(Boolean).join(" ") || undefined,
+                            transform: el.rotation ? `rotate(${el.rotation}deg)` : undefined,
+                            transformOrigin: "top left",
                           }}
                         >
                           {el.text || "Text"}
                         </div>
+                      )}
+                      {el.type === "note" && (
+                        <div className="flex h-full w-full flex-col overflow-hidden rounded-sm border border-amber-600/50 bg-amber-100 px-1.5 py-1 text-[8px] leading-tight text-amber-950">
+                          <span className="truncate font-semibold">{el.text || "Note"}</span>
+                        </div>
+                      )}
+                      {(el.type === "pen" || el.type === "marker") && el.points && el.points.length > 1 && (
+                        <svg width="100%" height="100%" viewBox={`0 0 ${Math.max(1, el.w * scale)} ${Math.max(1, el.h * scale)}`} className="overflow-visible">
+                          <polyline
+                            points={el.points.map((point) => `${(point.x - el.x) * scale},${(point.y - el.y) * scale}`).join(" ")}
+                            fill="none"
+                            stroke={el.color}
+                            strokeWidth={Math.max(1, el.strokeWidth * scale)}
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                          />
+                        </svg>
                       )}
                       {el.type === "rect" &&
                         (el.fill ? (
@@ -1310,6 +1644,34 @@ export function EditPdfTool() {
                       )}
                     </div>
                   ))}
+                  {draftPoints.length > 1 && (
+                    <svg className="pointer-events-none absolute inset-0 h-full w-full" viewBox={`0 0 ${pageW} ${pageH}`}>
+                      <polyline
+                        points={draftPoints.map((point) => `${point.x},${point.y}`).join(" ")}
+                        fill="none"
+                        stroke={prefs.value.shapeColor}
+                        strokeWidth={prefs.value.strokeWidth}
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      />
+                    </svg>
+                  )}
+                  {replaceMode &&
+                    textRuns.map((run) => (
+                      <button
+                        key={run.id}
+                        type="button"
+                        onPointerDown={(event) => event.stopPropagation()}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          applyReplacement(run);
+                        }}
+                        title={`Replace: ${run.text}`}
+                        aria-label={`Replace text: ${run.text.slice(0, 60)}`}
+                        className="absolute z-10 rounded-[2px] border border-clay/70 bg-clay/10 hover:bg-clay/25"
+                        style={{ left: run.x * scale, top: run.y * scale, width: run.w * scale, height: run.h * scale }}
+                      />
+                    ))}
                 </div>
               </div>
             </div>
@@ -1380,7 +1742,7 @@ export function EditPdfTool() {
           <div className="mt-4">
             <AdvancedOptions
               scope="edit"
-              badge="10 controls"
+              badge="15 controls"
               description="Defaults for new text, shapes and images"
               onReset={prefs.reset}
             >
@@ -1442,6 +1804,28 @@ export function EditPdfTool() {
                       >
                         <Italic className="h-3.5 w-3.5" /> Italic
                       </button>
+                    </div>
+                    <Field label="Font family">
+                      <Select value={prefs.value.fontFamily} onChange={(event) => prefs.set("fontFamily", event.target.value as ElFont)}>
+                        {FONT_OPTIONS.map((font) => (
+                          <option key={font.value} value={font.value}>{font.label}</option>
+                        ))}
+                      </Select>
+                    </Field>
+                    <NumberField label="Line height" value={prefs.value.lineHeight} onChange={(value) => prefs.set("lineHeight", clamp(value, 0.9, 3))} min={0.9} max={3} step={0.05} />
+                    <NumberField label="Rotation" value={prefs.value.rotation} onChange={(value) => prefs.set("rotation", clamp(value, -180, 180))} min={-180} max={180} step={1} suffix="°" />
+                    <div className="sm:col-span-2">
+                      <Switch
+                        checked={prefs.value.textBackground}
+                        onChange={(value) => prefs.set("textBackground", value)}
+                        label="Text background"
+                        description="Places a solid rectangle behind new text."
+                      />
+                      {prefs.value.textBackground && (
+                        <div className="mt-2">
+                          <ColorInput value={prefs.value.textBackgroundColor} onChange={(value) => prefs.set("textBackgroundColor", value)} label="Text background colour" />
+                        </div>
+                      )}
                     </div>
                   </OptionsGrid>
                 </div>
@@ -1561,10 +1945,81 @@ export function EditPdfTool() {
                       >
                         <Italic className="h-3.5 w-3.5" />
                       </button>
+                      <button
+                        type="button"
+                        aria-label="Toggle underline"
+                        aria-pressed={selected.underline}
+                        onClick={() => updateSelected({ underline: !selected.underline })}
+                        className={cn(
+                          "flex h-8 w-8 items-center justify-center rounded-lg border",
+                          selected.underline ? "border-forest bg-forest text-paper" : "border-line bg-paper text-ink/70",
+                        )}
+                      >
+                        <Underline className="h-3.5 w-3.5" />
+                      </button>
+                      <button
+                        type="button"
+                        aria-label="Toggle strikethrough"
+                        aria-pressed={selected.strikethrough}
+                        onClick={() => updateSelected({ strikethrough: !selected.strikethrough })}
+                        className={cn(
+                          "flex h-8 w-8 items-center justify-center rounded-lg border",
+                          selected.strikethrough ? "border-forest bg-forest text-paper" : "border-line bg-paper text-ink/70",
+                        )}
+                      >
+                        <Strikethrough className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                    <Field label="Font family">
+                      <Select value={selected.fontFamily} onChange={(event) => updateSelected({ fontFamily: event.target.value as ElFont })}>
+                        {FONT_OPTIONS.map((font) => (
+                          <option key={font.value} value={font.value}>{font.label}</option>
+                        ))}
+                      </Select>
+                    </Field>
+                    <div className="grid grid-cols-2 gap-2">
+                      <Field label="Line height">
+                        <input
+                          type="number"
+                          min={0.9}
+                          max={3}
+                          step={0.05}
+                          value={selected.lineHeight}
+                          onChange={(event) => updateSelected({ lineHeight: clamp(Number(event.target.value) || 1.28, 0.9, 3) })}
+                          className={cn(inputClass, "h-9")}
+                        />
+                      </Field>
+                      <Field label="Rotation°">
+                        <input
+                          type="number"
+                          min={-180}
+                          max={180}
+                          step={1}
+                          value={selected.rotation}
+                          onChange={(event) => updateSelected({ rotation: clamp(Number(event.target.value) || 0, -180, 180) })}
+                          className={cn(inputClass, "h-9")}
+                        />
+                      </Field>
+                    </div>
+                    <div className="space-y-2">
+                      <Switch
+                        checked={Boolean(selected.background)}
+                        onChange={(enabled) => updateSelected({ background: enabled ? prefs.value.textBackgroundColor : null })}
+                        label="Background behind text"
+                        description="Useful when covering a line before writing a replacement."
+                      />
+                      {selected.background && (
+                        <ColorInput value={selected.background} onChange={(background) => updateSelected({ background })} label="Text background colour" />
+                      )}
                     </div>
                   </>
                 )}
-                {(selected.type === "rect" || selected.type === "ellipse" || selected.type === "line" || selected.type === "arrow" || selected.type === "highlight") && (
+                {selected.type === "note" && (
+                  <Field label="Note text">
+                    <TextArea value={selected.text} rows={3} onChange={(event) => updateSelected({ text: event.target.value })} placeholder="Add a note" />
+                  </Field>
+                )}
+                {(selected.type === "rect" || selected.type === "ellipse" || selected.type === "line" || selected.type === "arrow" || selected.type === "highlight" || selected.type === "whiteout") && (
                   <Field label="Colour">
                     <ColorInput value={selected.color} onChange={(color) => updateSelected({ color })} label="Element colour" />
                   </Field>
@@ -2058,7 +2513,7 @@ export function SignPdfTool() {
       )}
       <FileRow file={pdf.file} onRemove={pdf.clear} size={`${pdf.pageCount} pages · ${formatBytes(pdf.file.size)}`} />
 
-      <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_260px]">
+      <div className="grid min-w-0 gap-4 lg:grid-cols-[minmax(0,1fr)_260px]">
         <div className="space-y-3">
           <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-line bg-bone-deep/40 p-2">
             <div className="flex items-center gap-1">
