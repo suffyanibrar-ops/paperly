@@ -196,19 +196,20 @@ export function RangeField({
   );
 }
 
+const NEXT_ACTIONS = ["compress", "sign", "redact", "protect", "organize"];
+
 export function ContinueWith({ bytes, filename, ids }: { bytes: Uint8Array; filename: string; ids?: string[] }) {
   const toolId = useToolId();
-  const current = toolId ? getTool(toolId) : undefined;
-  const suggested = (ids ?? current?.related ?? [])
+  const candidates = [...new Set([...(ids ?? []), ...NEXT_ACTIONS])];
+  const suggested = candidates
     .map((id) => getTool(id))
-    .filter((t) => Boolean(t) && t!.accepts.includes("application/pdf") && t!.id !== toolId)
-    .map((t) => t!)
-    .slice(0, 3);
+    .filter((t): t is NonNullable<ReturnType<typeof getTool>> => Boolean(t) && t!.accepts.includes("application/pdf") && t!.id !== toolId)
+    .slice(0, 5);
   if (!suggested.length) return null;
   return (
     <div className="mt-3 border-t border-paper/15 pt-3">
-      <p className="text-[10px] font-semibold uppercase tracking-[0.1em] text-paper/75">Continue with the result</p>
-      <div className="mt-2 flex flex-wrap gap-1.5">
+      <p className="text-[10px] font-semibold uppercase tracking-[0.1em] text-paper/75">Next action — keep editing locally</p>
+      <div className="scrollbar-none mt-2 flex gap-1.5 overflow-x-auto pb-1 sm:flex-wrap">
         {suggested.map((tool) => (
           <button
             key={tool.id}
@@ -219,7 +220,7 @@ export function ContinueWith({ bytes, filename, ids }: { bytes: Uint8Array; file
               });
               startTool(tool.id, [file]);
             }}
-            className={darkActionClass}
+            className={cn(darkActionClass, "min-h-11 shrink-0 sm:min-h-0")}
           >
             <tool.icon className="h-3.5 w-3.5 text-lime" /> {tool.name}
           </button>
@@ -409,7 +410,7 @@ export function DownloadPanel({
             </p>
           )}
         </div>
-        {bytes ? <ContinueWith bytes={bytes} filename={finalName} ids={handoffIds} /> : null}
+        {bytes && type === "application/pdf" ? <ContinueWith bytes={bytes} filename={finalName} ids={handoffIds} /> : null}
         {extra}
       </SuccessPanel>
       {previewOpen && bytes ? (

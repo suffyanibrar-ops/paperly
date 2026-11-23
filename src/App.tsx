@@ -176,7 +176,7 @@ export default function App() {
   else page = <NotFoundPage />;
 
   return (
-    <div className="flex min-h-screen flex-col bg-bone">
+    <div className="flex min-h-[100dvh] flex-col bg-bone">
       <a
         href="#main-content"
         className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-[100] focus:rounded-lg focus:bg-ink focus:px-4 focus:py-2 focus:text-sm focus:text-paper"

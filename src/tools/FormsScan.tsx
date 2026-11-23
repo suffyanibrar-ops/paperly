@@ -31,7 +31,10 @@ import {
   downloadBytes,
   formatBytes,
   imageToJpegDataUrl,
+  openPdfJs,
   openPdfLib,
+  readFileBytes,
+  renderPdfPage,
   sanitizeName,
 } from "@/lib/pdf";
 import { useInitialFiles, usePdfFile } from "@/lib/usePdf";
@@ -802,6 +805,8 @@ const SCAN_PRESETS = [
 type ScanPresetId = (typeof SCAN_PRESETS)[number]["id"];
 
 export function ScanTool() {
+  const initial = useInitialFiles();
+  const initialLoaded = useRef(false);
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const opts = useToolPreferences("scan", {
@@ -888,16 +893,17 @@ export function ScanTool() {
 
   const addFiles = async (files: File[]) => {
     setError("");
-    const accepted = files.filter(
+    const images = files.filter(
       (file) => file.type.startsWith("image/") || /\.(jpe?g|png|webp|heic|avif)$/i.test(file.name),
     );
-    if (!accepted.length) {
-      setError("Add photos in JPG, PNG or WebP format.");
+    const pdfs = files.filter((file) => file.type === "application/pdf" || /\.pdf$/i.test(file.name));
+    if (!images.length && !pdfs.length) {
+      setError("Add photos in JPG, PNG or WebP format, or a PDF.");
       return;
     }
     try {
       const next: Capture[] = [];
-      for (const file of accepted) {
+      for (const file of images) {
         await validateUpload(file, "image/jpeg,image/png,image/webp,image/avif,.jpg,.jpeg,.png,.webp,.avif");
         const jpeg = await imageToJpegDataUrl(file, 2400, 0.92);
         next.push({
@@ -908,11 +914,32 @@ export function ScanTool() {
           height: jpeg.height,
         });
       }
+      for (const file of pdfs) {
+        await validateUpload(file, "application/pdf,.pdf");
+        const doc = await openPdfJs(await readFileBytes(file));
+        for (let page = 1; page <= Math.min(doc.numPages, 50); page++) {
+          const rendered = await renderPdfPage(doc, page, { targetWidth: 1800, type: "image/jpeg", quality: 0.9 });
+          next.push({
+            id: `${Date.now()}-${page}-${Math.random().toString(36).slice(2, 6)}`,
+            dataUrl: rendered.dataUrl,
+            rotation: 0,
+            width: rendered.width,
+            height: rendered.height,
+          });
+        }
+        await doc.destroy().catch(() => undefined);
+      }
       setCaptures((list) => [...list, ...next]);
     } catch (err) {
-      setError(friendlyProcessingError(err, "One of those images couldn’t be read. Try a JPG or PNG photo."));
+      setError(friendlyProcessingError(err, "One of those files couldn’t be read. Try a JPG, PNG or PDF."));
     }
   };
+
+  useEffect(() => {
+    if (initialLoaded.current || !initial.length) return;
+    initialLoaded.current = true;
+    void addFiles(initial);
+  }, [initial]);
 
   const addSampleScan = async () => {
     setSampleBusy(true);
@@ -1091,7 +1118,7 @@ export function ScanTool() {
                   <Plus className="h-4 w-4" /> Add photos
                   <input
                     type="file"
-                    accept="image/jpeg,image/png,image/webp,image/avif,.jpg,.jpeg,.png,.webp,.avif"
+                    accept="application/pdf,image/*,.pdf,.jpg,.jpeg,.png,.webp,.avif"
                     multiple
                     className="sr-only"
                     onChange={(e) => {

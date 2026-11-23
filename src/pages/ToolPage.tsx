@@ -2,7 +2,7 @@ import { ArrowRight, Info, ShieldCheck } from "lucide-react";
 import { Suspense, lazy, type ComponentType, type LazyExoticComponent } from "react";
 import { getTool, type Tool } from "@/lib/toolRegistry";
 import { toolPath } from "@/lib/slugs";
-import { Spinner, ToolShell, ToolTile } from "@/components/ui";
+import { Spinner, ToolWorkspaceShell, ToolTile } from "@/components/ui";
 import { NotFoundPage } from "@/pages/Info";
 
 /**
@@ -170,11 +170,11 @@ export default function ToolPage({ toolId }: { toolId: string }) {
   if (!Component) return <NotFoundPage />;
   const wide = WIDE_TOOLS.has(tool.id);
   return (
-    <ToolShell tool={tool} wide={wide} aside={<WideAside tool={tool} />}>
+    <ToolWorkspaceShell tool={tool} wide={wide} aside={<WideAside tool={tool} />}>
       <Suspense key={tool.id} fallback={<ToolLoading />}>
         <Component />
       </Suspense>
-    </ToolShell>
+    </ToolWorkspaceShell>
   );
 }
 

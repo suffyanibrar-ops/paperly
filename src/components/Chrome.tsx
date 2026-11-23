@@ -74,7 +74,7 @@ export function Header() {
 
   return (
     <header className="sticky top-0 z-50">
-      <div className="bg-ink text-paper">
+      <div className="bg-ink text-paper" style={{ paddingTop: "env(safe-area-inset-top)" }}>
         <div className="container-page flex h-8 items-center justify-between text-[11px] font-medium tracking-[0.01em]">
           <p className="flex items-center gap-1.5 text-paper/75">
             <Lock className="h-3 w-3 text-lime" />

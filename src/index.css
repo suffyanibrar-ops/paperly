@@ -337,3 +337,79 @@
     min-width: 36px;
   }
 }
+
+/* ---------------------------------------------------------------------------
+ * Mobile-first workspace primitives (360px → 1440px)
+ * ------------------------------------------------------------------------- */
+html,
+body,
+#root {
+  min-height: 100dvh;
+}
+
+html {
+  -webkit-tap-highlight-color: transparent;
+}
+
+.fluid-hero {
+  font-size: clamp(2.15rem, 8.2vw, 4.15rem);
+  line-height: 0.98;
+  letter-spacing: -0.045em;
+}
+
+.scrollbar-none {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.scrollbar-none::-webkit-scrollbar {
+  display: none;
+}
+
+.pb-safe {
+  padding-bottom: max(0.75rem, env(safe-area-inset-bottom));
+}
+
+@media (max-width: 767px) {
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+  select,
+  textarea {
+    font-size: 16px !important;
+  }
+  .container-page {
+    padding-inline: 1rem;
+  }
+  [data-filter-pill] {
+    min-height: 48px;
+  }
+
+  /* The shared Advanced Options panel becomes a bottom sheet on phones. */
+  [data-mobile-sheet-target="advanced"] {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: calc(64px + env(safe-area-inset-bottom));
+    z-index: 69;
+    max-height: 74dvh;
+    overflow-y: auto;
+    border-radius: 1rem 1rem 0 0;
+    border: 1px solid var(--color-line);
+    background: var(--color-paper);
+    box-shadow: var(--shadow-lift);
+    transform: translateY(112%);
+    transition: transform 220ms cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  html[data-mobile-sheet="advanced"] [data-mobile-sheet-target="advanced"] {
+    transform: translateY(0);
+  }
+}
+
+@media (pointer: coarse) {
+  [data-paperly-primary="true"],
+  .touch-target {
+    min-height: 48px;
+  }
+  [data-hover-reveal] {
+    opacity: 1 !important;
+    transform: none !important;
+  }
+}

@@ -1,4 +1,4 @@
-import { ArrowRight, Check, Cpu, Search, ShieldCheck, Sparkles, Zap } from "lucide-react";
+import { ArrowRight, Check, Search, Sparkles } from "lucide-react";
 import { useEffect, useState } from "react";
 import { TOOLS } from "@/lib/toolRegistry";
 import { TOOL_GROUPS, searchScore, toolGroup, type ToolGroupId } from "@/lib/groups";
@@ -33,26 +33,19 @@ export default function Tools({ initialCategory = "all", initialNew = false }: {
           <Badge tone="forest">
             <Sparkles className="h-3 w-3" /> {TOOLS.length} tools · all local
           </Badge>
-          <h1 className="mt-4 max-w-[18ch] text-[40px] font-semibold leading-[0.98] tracking-[-0.045em] sm:text-[54px]">
+          <h1 className="fluid-hero mt-3 max-w-[18ch] font-semibold">
             The complete <span className="font-serif font-normal italic text-forest">PDF toolkit.</span>
           </h1>
-          <p className="mt-4 max-w-[58ch] text-[14.5px] leading-relaxed text-ink/70 sm:text-[15.5px]">
+          <p className="mt-3 max-w-[52ch] text-[14px] leading-relaxed text-ink/70">
             Organize, optimize, convert, edit and secure. Every tool does real work on your device, returns a clean file and asks for nothing in
             return.
           </p>
-          <div className="mt-6 flex flex-wrap gap-x-5 gap-y-2 text-[11.5px] font-medium text-ink/70">
-            <span className="flex items-center gap-1.5"><ShieldCheck className="h-3.5 w-3.5 text-forest" /> Files never uploaded</span>
-            <span className="flex items-center gap-1.5"><Check className="h-3.5 w-3.5 text-forest" /> No account or daily limit</span>
-            <span className="flex items-center gap-1.5"><Zap className="h-3.5 w-3.5 text-forest" /> Instant local processing</span>
-            <span className="flex items-center gap-1.5"><Cpu className="h-3.5 w-3.5 text-forest" /> No watermarks</span>
-            <span className="flex items-center gap-1.5 text-forest"><Sparkles className="h-3.5 w-3.5" /> {TOOLS.filter((t) => t.new).length} new tools</span>
-          </div>
         </div>
       </section>
 
-      <section className="sticky top-[100px] z-30 border-b border-line bg-bone/90 py-3 backdrop-blur-xl">
+      <section className="sticky top-[72px] z-30 border-b border-line bg-bone/90 py-2.5 backdrop-blur-xl sm:top-[100px]">
         <div className="container-page flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div className="flex gap-1 overflow-x-auto pb-1 scrollbar-thin sm:pb-0">
+          <div className="scrollbar-none -mx-1 flex gap-2 overflow-x-auto px-1 pb-1 sm:flex-wrap">
             <FilterPill active={category === "all" && !showNew} onClick={() => { setCategory("all"); setShowNew(false); }} label="All" count={TOOLS.length} />
             <FilterPill active={showNew} onClick={() => { setShowNew(!showNew); setCategory("all"); }} label="New" count={TOOLS.filter((t) => t.new).length} dot="bg-clay" />
             {TOOL_GROUPS.map((group) => (
@@ -73,7 +66,7 @@ export default function Tools({ initialCategory = "all", initialNew = false }: {
               onChange={(e) => setQuery(e.target.value)}
               placeholder="Search tools…"
               aria-label="Search tools"
-              className="h-10 w-full rounded-xl border border-line bg-paper pl-9 pr-3 text-[13px] placeholder:text-ink/75 focus:border-forest/40 focus:outline-none focus:ring-2 focus:ring-forest/10"
+              className="h-12 w-full rounded-xl border border-line bg-paper pl-9 pr-3 text-[16px] placeholder:text-ink/75 sm:h-10 sm:text-[13px] focus:border-forest/40 focus:outline-none focus:ring-2 focus:ring-forest/10"
             />
           </label>
         </div>
@@ -108,7 +101,7 @@ export default function Tools({ initialCategory = "all", initialNew = false }: {
                   </div>
                   <span className="text-[11px] font-medium text-ink/75">All processing stays in your browser</span>
                 </div>
-                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+                <div className="grid grid-cols-1 gap-3 min-[480px]:grid-cols-2 md:grid-cols-3 lg:grid-cols-4">
                   {tools.map((tool) => (
                     <ToolCard key={tool.id} tool={tool} />
                   ))}
@@ -171,9 +164,10 @@ function FilterPill({ active, onClick, label, count, dot }: { active: boolean; o
   return (
     <button
       type="button"
+      data-filter-pill
       onClick={onClick}
       className={cn(
-        "flex shrink-0 items-center gap-1.5 rounded-full border px-3.5 py-1.5 text-[12px] font-medium transition-colors",
+        "flex min-h-12 shrink-0 items-center gap-1.5 rounded-full border px-3.5 text-[12px] font-medium transition-colors sm:min-h-0 sm:py-1.5",
         active ? "border-forest bg-forest text-paper" : "border-line bg-paper text-ink/70 hover:border-forest/30",
       )}
     >

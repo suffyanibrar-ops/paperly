@@ -747,26 +747,40 @@ export function RedactTool() {
                     value={term}
                     onChange={(e) => setTerm(e.target.value)}
                     placeholder="e.g. Acme Ltd"
-                    className="h-9 w-full rounded-lg border border-line bg-paper px-2.5 text-[12.5px] focus:border-forest/50 focus:outline-none focus:ring-2 focus:ring-forest/10"
+                    className="h-12 w-full rounded-lg border border-line bg-paper px-2.5 text-[16px] focus:border-forest/50 focus:outline-none focus:ring-2 focus:ring-forest/10 sm:h-9 sm:text-[12.5px]"
                     maxLength={200}
                   />
                 </Field>
-                <div className="mt-2 flex flex-wrap gap-1">
-                  {SEARCH_PRESETS.map((preset) => (
-                    <button
-                      key={preset.id}
-                      type="button"
-                      aria-pressed={prefs.value.preset === preset.id}
-                      title={preset.description}
-                      onClick={() => prefs.set("preset", prefs.value.preset === preset.id ? "none" : preset.id)}
-                      className={cn(
-                        "rounded-md border px-1.5 py-0.5 text-[10.5px] font-medium",
-                        prefs.value.preset === preset.id ? "border-forest bg-forest text-paper" : "border-line bg-paper text-ink/60",
-                      )}
-                    >
-                      {preset.shortLabel}
-                    </button>
-                  ))}
+                <div className="scrollbar-none mt-2 flex gap-1.5 overflow-x-auto pb-1 sm:flex-wrap">
+                  {SEARCH_PRESETS.map((preset) => {
+                    const label =
+                      preset.id === "email"
+                        ? "Emails"
+                        : preset.id === "phone"
+                          ? "Phone Numbers"
+                          : preset.id === "ssn"
+                            ? "SSN / IDs"
+                            : preset.id === "credit-card"
+                              ? "Credit Cards"
+                              : preset.id === "date"
+                                ? "Dates"
+                                : preset.shortLabel;
+                    return (
+                      <button
+                        key={preset.id}
+                        type="button"
+                        aria-pressed={prefs.value.preset === preset.id}
+                        title={preset.description}
+                        onClick={() => prefs.set("preset", prefs.value.preset === preset.id ? "none" : preset.id)}
+                        className={cn(
+                          "min-h-12 shrink-0 rounded-xl border px-3 text-[11.5px] font-semibold sm:min-h-0 sm:rounded-md sm:px-2 sm:py-1 sm:text-[10.5px]",
+                          prefs.value.preset === preset.id ? "border-forest bg-forest text-paper" : "border-line bg-paper text-ink/65",
+                        )}
+                      >
+                        {label}
+                      </button>
+                    );
+                  })}
                 </div>
                 <div className="mt-2 space-y-1.5">
                   <Switch checked={prefs.value.caseSensitive} onChange={(v) => prefs.set("caseSensitive", v)} label="Match case" />

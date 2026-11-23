@@ -34,6 +34,7 @@ import {
   type TextareaHTMLAttributes,
 } from "react";
 import { cn } from "@/utils/cn";
+import { MobileActionBar } from "@/components/MobileActionBar";
 import { CATEGORIES, getTool, type Tool } from "@/lib/toolRegistry";
 import { groupLabel, toolGroup } from "@/lib/groups";
 import { useFavorites } from "@/lib/activity";
@@ -85,8 +86,8 @@ const buttonVariants: Record<ButtonVariant, string> = {
 };
 
 const buttonSizes: Record<ButtonSize, string> = {
-  sm: "h-9 px-3.5 text-[13px] gap-1.5 rounded-xl",
-  md: "h-11 px-5 text-[14px] gap-2 rounded-xl",
+  sm: "h-12 sm:h-9 px-3.5 text-[13px] gap-1.5 rounded-xl",
+  md: "h-12 sm:h-11 px-5 text-[14px] gap-2 rounded-xl",
   lg: "h-12 px-6 text-[15px] gap-2 rounded-xl",
 };
 
@@ -104,6 +105,7 @@ export function Button({
 }) {
   return (
     <button
+      data-paperly-primary={variant === "primary" || variant === "accent" || variant === "danger" ? "true" : undefined}
       className={cn(
         "inline-flex select-none items-center justify-center font-medium transition-all duration-150 disabled:cursor-not-allowed disabled:opacity-45",
         buttonVariants[variant],
@@ -235,6 +237,7 @@ export function FileDrop({
     <div>
       <label
         htmlFor={id}
+        data-paperly-primary="true"
         aria-label={`Choose ${acceptLabel}`}
         aria-describedby={error ? `${id}-error` : undefined}
         aria-disabled={disabled}
@@ -246,7 +249,7 @@ export function FileDrop({
         onDrop={onDrop}
         className={cn(
           "group relative flex cursor-pointer flex-col items-center justify-center rounded-2xl border border-dashed text-center transition-all duration-200",
-          compact ? "px-5 py-7" : "px-6 py-12 sm:py-16",
+          compact ? "px-4 py-4 sm:px-5 sm:py-7" : "px-6 py-12 sm:py-16",
           dragging
             ? "border-forest bg-lime/20 ring-4 ring-lime/25"
             : "border-ink/20 bg-bone-deep/35 hover:border-forest/50 hover:bg-lime/[0.09]",
@@ -270,12 +273,12 @@ export function FileDrop({
         <div
           className={cn(
             "mb-4 flex items-center justify-center rounded-2xl border border-forest/10 bg-forest text-lime transition-transform duration-200 group-hover:-translate-y-0.5",
-            compact ? "h-11 w-11" : "h-14 w-14",
+            compact ? "mb-2 h-9 w-9 sm:mb-4 sm:h-11 sm:w-11" : "mb-4 h-14 w-14",
           )}
         >
           <UploadCloud className={compact ? "h-5 w-5" : "h-6 w-6"} strokeWidth={1.9} />
         </div>
-        <p className={cn("font-semibold tracking-[-0.01em]", compact ? "text-[14px]" : "text-[17px]")}>
+        <p className={cn("font-semibold tracking-[-0.01em]", compact ? "text-[13px] sm:text-[14px]" : "text-[17px]")}>
           {dragging ? "Drop it — it stays on your device" : "Drop your file here"}
         </p>
         <p className={cn("mt-1 text-muted", compact ? "text-xs" : "text-[13px]")}>
@@ -676,7 +679,7 @@ const SHORTCUTS: { keys: string; label: string }[] = [
   { keys: "⇧ + click", label: "Select a range of page thumbnails" },
 ];
 
-export function ToolShell({
+export function ToolWorkspaceShell({
   tool,
   children,
   wide = false,
@@ -710,9 +713,9 @@ export function ToolShell({
 
   return (
     <ToolIdContext.Provider value={tool.id}>
-    <div className="pb-20 pt-7">
+    <div className="pb-28 pt-5 md:pb-20 md:pt-7">
       <div className="container-page">
-        <nav aria-label="Breadcrumb" className="mb-6 flex items-center gap-1.5 text-[12px] text-muted">
+        <nav aria-label="Breadcrumb" className="mb-4 hidden items-center gap-1.5 text-[12px] text-muted sm:flex">
           <a href="/tools" className="transition-colors hover:text-forest">
             All tools
           </a>
@@ -727,7 +730,7 @@ export function ToolShell({
         {batchable && (
           <a
             href="/batch-pdf"
-            className="mb-5 flex flex-wrap items-center gap-2 rounded-xl border border-forest/15 bg-lime/20 px-3.5 py-2.5 text-[11.5px] font-medium text-forest transition-colors hover:border-forest/35"
+            className="mb-4 hidden flex-wrap items-center gap-2 rounded-xl border border-forest/15 bg-lime/20 px-3.5 py-2.5 text-[11.5px] font-medium text-forest transition-colors hover:border-forest/35 sm:flex"
           >
             <Layers className="h-3.5 w-3.5" />
             Need this across many files? Batch PDF runs compress, watermark, OCR and sanitize on multiple PDFs and returns one ZIP.
@@ -735,14 +738,14 @@ export function ToolShell({
           </a>
         )}
 
-        <div className="mb-7 flex flex-col gap-5 border-b border-line pb-7 md:flex-row md:items-end md:justify-between">
+        <div className="mb-5 flex flex-col gap-4 border-b border-line pb-5 md:mb-7 md:flex-row md:items-end md:justify-between md:pb-7">
           <div className="flex items-start gap-4">
             <div className={cn("flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl border border-ink/5", cat.tile)}>
               <tool.icon className="h-7 w-7" strokeWidth={1.8} />
             </div>
             <div>
-              <h1 className="text-[30px] font-semibold leading-[1.05] tracking-[-0.035em] sm:text-[38px]">{tool.name}</h1>
-              <p className="mt-2 max-w-2xl text-[14px] leading-relaxed text-muted sm:text-[15px]">{tool.tagline}</p>
+              <h1 className="text-[26px] font-semibold leading-[1.05] tracking-[-0.035em] sm:text-[38px]">{tool.name}</h1>
+              <p className="mt-1.5 max-w-2xl text-[13px] leading-relaxed text-muted sm:mt-2 sm:text-[15px]">{tool.tagline}</p>
             </div>
           </div>
           <div className="flex shrink-0 items-center gap-2">
@@ -768,7 +771,7 @@ export function ToolShell({
             >
               <Star className={cn("h-4 w-4", favorite && "fill-forest")} />
             </button>
-            <div className="flex items-center gap-2 rounded-full border border-forest/15 bg-lime/25 px-3.5 py-2 text-[11.5px] font-semibold text-forest">
+            <div className="hidden items-center gap-2 rounded-full border border-forest/15 bg-lime/25 px-3.5 py-2 text-[11.5px] font-semibold text-forest sm:flex">
               <ShieldCheck className="h-4 w-4" />
               Documents stay on-device
             </div>
@@ -777,12 +780,12 @@ export function ToolShell({
 
         <div className={cn("grid gap-7", wide ? "grid-cols-1" : "lg:grid-cols-[minmax(0,1fr)_310px]")}>
           <div className="min-w-0">
-            <div className="surface p-4 sm:p-6">{children}</div>
-            {wide && aside}
+            <div className="surface p-3 sm:p-5 md:p-6" data-tool-workspace-content>{children}</div>
+            {wide && <div className="mt-16 border-t border-line pt-8">{aside}</div>}
           </div>
 
           {!wide && (
-            <aside className="space-y-5">
+            <aside className="mt-16 space-y-5 border-t border-line pt-8 lg:mt-0 lg:border-0 lg:pt-0">
               <div className="surface p-5">
                 <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-ink/75">How it works</p>
                 <ol className="mt-3.5 space-y-3.5">
@@ -840,7 +843,7 @@ export function ToolShell({
           )}
         </div>
 
-        <div className="mt-12 flex items-center justify-center gap-2 border-t border-line pt-6 text-[12px] text-muted">
+        <div className="mt-16 hidden items-center justify-center gap-2 border-t border-line pt-6 text-[12px] text-muted sm:flex">
           <ShieldCheck className="h-4 w-4 text-forest" /> No sign-up. No daily limits. No watermarks on your work.
         </div>
       </div>
@@ -880,6 +883,7 @@ export function ToolShell({
           </div>
         </div>
       ) : null}
+      <MobileActionBar />
     </div>
     </ToolIdContext.Provider>
   );

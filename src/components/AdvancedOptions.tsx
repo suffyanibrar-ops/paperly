@@ -35,7 +35,7 @@ export function AdvancedOptions({
   const [open, setOpen] = useStickyFlag(`advanced.${scope}`, defaultOpen);
   const panelId = useId();
   return (
-    <section className={cn("overflow-hidden rounded-xl border border-line bg-bone-deep/25", className)}>
+    <section data-mobile-sheet-target="advanced" className={cn("overflow-hidden rounded-xl border border-line bg-bone-deep/25", className)}>
       <div className="flex items-center gap-2">
         <button
           type="button"
