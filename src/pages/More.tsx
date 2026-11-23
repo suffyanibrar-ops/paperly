@@ -23,6 +23,7 @@ import { CATEGORIES, TOOLS, getTool, type Tool } from "@/lib/toolRegistry";
 import { clearActivity, formatWhen, removeActivity, useActivity, useFavorites } from "@/lib/activity";
 import { clearAllPreferences, listPreferenceScopes } from "@/lib/prefs";
 import { cn } from "@/utils/cn";
+import { toolPath } from "@/lib/slugs";
 
 /* ================================================================== *
  * GUIDES
@@ -277,7 +278,7 @@ export function GuidesPage({ initialGuide }: { initialGuide?: string }) {
       <div>
         <div className="border-b border-line bg-paper/60">
           <div className="container-page py-5">
-            <a href="#/guides" onClick={() => setSelected(null)} className="inline-flex items-center gap-1.5 text-[12px] font-medium text-forest hover:underline">
+            <a href="/guides" onClick={() => setSelected(null)} className="inline-flex items-center gap-1.5 text-[12px] font-medium text-forest hover:underline">
               <ArrowLeft className="h-3.5 w-3.5" /> All guides
             </a>
           </div>
@@ -321,7 +322,7 @@ export function GuidesPage({ initialGuide }: { initialGuide?: string }) {
                 const tool = getTool(id);
                 if (!tool) return null;
                 return (
-                  <a key={id} href={`#/tool/${id}`} className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-line bg-paper px-3 text-[12px] font-medium hover:border-forest/35 hover:text-forest">
+                  <a key={id} href={toolPath(id)} className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-line bg-paper px-3 text-[12px] font-medium hover:border-forest/35 hover:text-forest">
                     <tool.icon className="h-3.5 w-3.5" /> {tool.name} <ArrowRight className="h-3 w-3" />
                   </a>
                 );
@@ -349,7 +350,7 @@ export function GuidesPage({ initialGuide }: { initialGuide?: string }) {
               <ShieldCheck className="h-5 w-5 text-lime" />
               <p className="mt-2 text-[14px] font-semibold">No uploads, ever</p>
               <p className="mt-1 text-[11.5px] leading-relaxed text-paper/70">Every technique here is performed in your browser. Nothing you try is stored on a server.</p>
-              <a href="#/tools" className="mt-3 inline-flex items-center gap-1 text-[12px] font-semibold text-lime hover:underline">
+              <a href="/tools" className="mt-3 inline-flex items-center gap-1 text-[12px] font-semibold text-lime hover:underline">
                 Try the tools <ArrowRight className="h-3.5 w-3.5" />
               </a>
             </div>
@@ -448,7 +449,7 @@ export function ActivityPage() {
                 {["merge", "compress", "ocr"].map((id) => {
                   const tool = getTool(id)!;
                   return (
-                    <a key={id} href={`#/tool/${id}`} className="inline-flex h-10 items-center gap-1.5 rounded-lg bg-ink px-4 text-[12.5px] font-medium text-paper">
+                    <a key={id} href={toolPath(id)} className="inline-flex h-10 items-center gap-1.5 rounded-lg bg-ink px-4 text-[12.5px] font-medium text-paper">
                       <tool.icon className="h-3.5 w-3.5 text-lime" /> {tool.name}
                     </a>
                   );
@@ -472,7 +473,7 @@ export function ActivityPage() {
                     </div>
                     <span className="flex shrink-0 items-center gap-1 text-[10.5px] text-ink/75"><Clock3 className="h-3 w-3" /> {formatWhen(entry.at)}</span>
                     {tool && (
-                      <a href={`#/tool/${tool.id}`} className="shrink-0 rounded-lg border border-line px-2.5 py-1.5 text-[11.5px] font-medium hover:border-forest/30 hover:text-forest">
+                      <a href={toolPath(tool.id)} className="shrink-0 rounded-lg border border-line px-2.5 py-1.5 text-[11.5px] font-medium hover:border-forest/30 hover:text-forest">
                         Open tool
                       </a>
                     )}
@@ -502,7 +503,7 @@ export function ActivityPage() {
                   return (
                     <div key={id} className="flex items-center gap-2 rounded-xl border border-line bg-paper p-2.5">
                       <ToolTile tool={tool} size="sm" />
-                      <a href={`#/tool/${id}`} className="min-w-0 flex-1 truncate text-[12px] font-medium hover:text-forest">{tool.name}</a>
+                      <a href={toolPath(id)} className="min-w-0 flex-1 truncate text-[12px] font-medium hover:text-forest">{tool.name}</a>
                       <button type="button" onClick={() => toggle(id)} aria-label={`Unpin ${tool.name}`} className="rounded p-1 text-forest">
                         <Star className="h-3.5 w-3.5 fill-forest" />
                       </button>
@@ -713,10 +714,10 @@ export function ContactPage() {
               <p className="mt-1.5 text-[11.5px] leading-relaxed text-muted">These answers solve most messages:</p>
               <ul className="mt-2 space-y-1.5">
                 {[
-                  { label: "Password-protected file?", href: "#/tool/unlock" },
-                  { label: "Scanned PDF has no text", href: "#/help" },
-                  { label: "Why compression didn’t help", href: "#/tool/compress" },
-                  { label: "How local processing works", href: "#/privacy" },
+                  { label: "Password-protected file?", href: "/unlock-pdf" },
+                  { label: "Scanned PDF has no text", href: "/help" },
+                  { label: "Why compression didn’t help", href: "/compress-pdf" },
+                  { label: "How local processing works", href: "/privacy" },
                 ].map((link) => (
                   <li key={link.href}>
                     <a href={link.href} className="flex items-center justify-between rounded-lg px-1 py-1.5 text-[11.5px] font-medium text-ink/75 hover:text-forest">
@@ -744,19 +745,19 @@ export function ContactPage() {
  * ================================================================== */
 export function SitemapPage() {
   const pages = [
-    { label: "Home", href: "#/" },
-    { label: "All tools", href: "#/tools" },
-    { label: "Why Paperly", href: "#/why" },
-    { label: "Compare with iLovePDF", href: "#/vs-ilovepdf" },
-    { label: "Pricing", href: "#/pricing" },
-    { label: "Privacy promise", href: "#/privacy" },
-    { label: "Guides", href: "#/guides" },
-    { label: "Help & FAQ", href: "#/help" },
-    { label: "Activity", href: "#/activity" },
-    { label: "About", href: "#/about" },
-    { label: "Contact", href: "#/contact" },
-    { label: "Sitemap", href: "#/sitemap" },
-    { label: "Terms", href: "#/terms" },
+    { label: "Home", href: "/" },
+    { label: "All tools", href: "/tools" },
+    { label: "Why Paperly", href: "/why" },
+    { label: "Compare with iLovePDF", href: "/vs-ilovepdf" },
+    { label: "Pricing", href: "/pricing" },
+    { label: "Privacy promise", href: "/privacy" },
+    { label: "Guides", href: "/guides" },
+    { label: "Help & FAQ", href: "/help" },
+    { label: "Activity", href: "/activity" },
+    { label: "About", href: "/about" },
+    { label: "Contact", href: "/contact" },
+    { label: "Sitemap", href: "/sitemap" },
+    { label: "Terms", href: "/terms" },
   ];
   return (
     <div>
@@ -781,7 +782,7 @@ export function SitemapPage() {
               </h2>
               <div className="grid gap-1.5 sm:grid-cols-2 lg:grid-cols-3">
                 {TOOLS.filter((tool) => tool.category === category).map((tool: Tool) => (
-                  <a key={tool.id} href={`#/tool/${tool.id}`} className="flex items-center gap-2 rounded-lg border border-line bg-paper px-3 py-2.5 text-[12px] font-medium hover:border-forest/30 hover:text-forest">
+                  <a key={tool.id} href={toolPath(tool.id)} className="flex items-center gap-2 rounded-lg border border-line bg-paper px-3 py-2.5 text-[12px] font-medium hover:border-forest/30 hover:text-forest">
                     <tool.icon className="h-3.5 w-3.5 text-ink/75" /> {tool.name}
                     {tool.new && <span className="ml-auto rounded-full bg-lime/45 px-1.5 py-0.5 text-[8.5px] font-bold uppercase tracking-[0.06em] text-forest">New</span>}
                   </a>

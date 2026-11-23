@@ -45,6 +45,9 @@ export default defineConfig({
   // Absolute base for normal deployments; set PAPERLY_BASE=./ (or a subpath like
   // /paperly/) when the built app is served from a CDN subdirectory.
   base: process.env.PAPERLY_BASE || "/",
+  // Public origin for canonical/OG tags. SITE_URL is the single source of truth;
+  // VITE_SITE_URL remains supported for projects already using the Vite prefix.
+  envPrefix: ["VITE_", "SITE_"],
   plugins: [react(), tailwindcss()],
   resolve: {
     alias: {

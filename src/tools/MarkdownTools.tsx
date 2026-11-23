@@ -1887,7 +1887,7 @@ export function PdfToMarkdownTool() {
           {job.failed && <Alert tone="error">{job.error}</Alert>}
           {job.failed && /OCR|text layer/i.test(job.error) && (
             <p className="text-[11.5px]">
-              <a href="#/tool/ocr" className="font-semibold text-forest underline">
+              <a href="/ocr-pdf" className="font-semibold text-forest underline">
                 Open OCR PDF
               </a>{" "}
               to add a searchable text layer first.
@@ -1916,7 +1916,7 @@ export function PdfToMarkdownTool() {
           Page{result.stats.emptyPages.length === 1 ? "" : "s"} {result.stats.emptyPages.slice(0, 12).join(", ")}
           {result.stats.emptyPages.length > 12 ? "…" : ""} contain{result.stats.emptyPages.length === 1 ? "s" : ""} no selectable text, so nothing was
           written for {result.stats.emptyPages.length === 1 ? "it" : "them"}. If those pages are scanned, run{" "}
-          <a href="#/tool/ocr" className="font-semibold underline">
+          <a href="/ocr-pdf" className="font-semibold underline">
             OCR PDF
           </a>{" "}
           first — Paperly never OCRs silently.

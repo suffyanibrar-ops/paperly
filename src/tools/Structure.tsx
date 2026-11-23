@@ -1108,7 +1108,7 @@ export function SplitByBookmarksTool() {
               {ranges.length === 0 ? (
                 <Alert tone="warning" title="No usable section targets">
                   The outline exists, but none of its bookmarks point at a page inside this PDF at the selected depth. Open{" "}
-                  <a href="#/tool/bookmarks" className="font-semibold underline">
+                  <a href="/bookmarks" className="font-semibold underline">
                     Edit Bookmarks
                   </a>{" "}
                   to repair the targets.

@@ -21,6 +21,9 @@ import { useState, type ReactNode } from "react";
 import { Badge } from "@/components/ui";
 import { POPULAR_IDS, TOOLS, getTool } from "@/lib/toolRegistry";
 import { cn } from "@/utils/cn";
+import { toolPath } from "@/lib/slugs";
+import { ZeroUploadGuide } from "@/components/ZeroUploadGuide";
+import { FREE_BATCH_LIMIT, FREE_WORKFLOW_LIMIT, ProBadge, usePro } from "@/lib/pro";
 
 /* ------------------------------------------------------------------ *
  * Shared hero
@@ -112,7 +115,7 @@ export function ClosingCTA() {
               {POPULAR_IDS.slice(0, 3).map((id) => {
                 const tool = getTool(id)!;
                 return (
-                  <a key={id} href={`#/tool/${id}`} className="inline-flex h-10 items-center gap-1.5 rounded-lg bg-lime px-3.5 text-[12.5px] font-semibold text-ink hover:bg-[#e4f88f]">
+                  <a key={id} href={toolPath(id)} className="inline-flex h-10 items-center gap-1.5 rounded-lg bg-lime px-3.5 text-[12.5px] font-semibold text-ink hover:bg-[#e4f88f]">
                     {tool.name} <ArrowRight className="h-3.5 w-3.5" />
                   </a>
                 );
@@ -143,10 +146,10 @@ export function WhyPage() {
         description="Online PDF tools usually ask you to upload first and trust later. We rebuilt the model: the tools run in your browser, so the question of where your file went simply doesn’t come up."
       >
         <div className="mt-6 flex flex-wrap gap-2">
-          <a href="#/tools" className="inline-flex h-11 items-center gap-2 rounded-xl bg-ink px-5 text-[13.5px] font-medium text-paper hover:bg-forest-soft">
+          <a href="/tools" className="inline-flex h-11 items-center gap-2 rounded-xl bg-ink px-5 text-[13.5px] font-medium text-paper hover:bg-forest-soft">
             Explore the toolkit <ArrowRight className="h-4 w-4 text-lime" />
           </a>
-          <a href="#/privacy" className="inline-flex h-11 items-center gap-2 rounded-xl border border-ink/15 px-5 text-[13.5px] font-medium hover:bg-paper">
+          <a href="/privacy" className="inline-flex h-11 items-center gap-2 rounded-xl border border-ink/15 px-5 text-[13.5px] font-medium hover:bg-paper">
             Privacy details
           </a>
         </div>
@@ -356,6 +359,8 @@ export function PrivacyPage() {
         </div>
       </section>
 
+      <ZeroUploadGuide />
+
       <section className="border-b border-line py-14">
         <div className="container-page grid gap-10 lg:grid-cols-[1.4fr_0.6fr] lg:gap-16">
           <div className="space-y-8">
@@ -423,7 +428,7 @@ export function PrivacyPage() {
               <p className="mt-1.5 text-[11.5px] leading-relaxed text-muted">
                 Review or clear filenames stored by this browser.
               </p>
-              <a href="#/activity" className="mt-1.5 inline-flex items-center gap-1 text-[11.5px] font-semibold text-forest hover:underline">
+              <a href="/activity" className="mt-1.5 inline-flex items-center gap-1 text-[11.5px] font-semibold text-forest hover:underline">
                 Open Activity &amp; clear history <ArrowRight className="h-3 w-3" />
               </a>
             </div>
@@ -460,21 +465,22 @@ export function PrivacyPage() {
  * PRICING
  * ================================================================== */
 export function PricingPage() {
+  const pro = usePro();
   return (
     <div>
       <PageHero
         eyebrow="Pricing"
         title={
           <>
-            One plan. Zero dollars.
+            Free tools. Fair Pro.
             <br />
             <span className="font-serif font-normal italic text-forest">No asterisks.</span>
           </>
         }
-        description="Every tool, every option, every page — free. No trial, no credit card, no “free” tier that watermarks your work or caps you at two files a day."
+        description="All 51 single-document tools are free and unlimited — no trial, no watermark, no daily cap. Optional Paperly Pro funds high-volume commercial features only."
       >
         <div className="mt-6 flex flex-wrap gap-2">
-          <a href="#/tools" className="inline-flex h-11 items-center gap-2 rounded-xl bg-ink px-5 text-[13.5px] font-medium text-paper hover:bg-forest-soft">
+          <a href="/tools" className="inline-flex h-11 items-center gap-2 rounded-xl bg-ink px-5 text-[13.5px] font-medium text-paper hover:bg-forest-soft">
             Start using the tools <ArrowRight className="h-4 w-4 text-lime" />
           </a>
           <a href="mailto:hello@paperly.tools" className="inline-flex h-11 items-center gap-2 rounded-xl border border-ink/15 px-5 text-[13.5px] font-medium hover:bg-paper">
@@ -513,13 +519,73 @@ export function PricingPage() {
                 </li>
               ))}
             </ul>
-            <a href="#/tools" className="mt-6 inline-flex h-12 items-center gap-2 rounded-xl bg-forest px-6 text-[14px] font-semibold text-paper hover:bg-forest-soft">
+            <a href="/tools" className="mt-6 inline-flex h-12 items-center gap-2 rounded-xl bg-forest px-6 text-[14px] font-semibold text-paper hover:bg-forest-soft">
               Open the toolkit <ArrowRight className="h-4 w-4 text-lime" />
             </a>
             <p className="mt-3 text-[10.5px] leading-relaxed text-muted">* Limited only by your device’s available memory, not by a price plan.</p>
           </div>
 
           <div className="space-y-4">
+            <div className="rounded-2xl border border-forest/25 bg-paper p-6">
+              <div className="flex items-center justify-between gap-2">
+                <div>
+                  <p className="flex items-center gap-1.5 text-[10.5px] font-bold uppercase tracking-[0.12em] text-forest">
+                    Paperly Pro <ProBadge />
+                  </p>
+                  <h2 className="mt-1 text-[22px] font-semibold tracking-[-0.03em]">For heavy, commercial workflows</h2>
+                </div>
+                {pro.isPro && <span className="rounded-full bg-lime/60 px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.08em] text-forest">Active</span>}
+              </div>
+              <p className="mt-2 text-[12px] leading-relaxed text-muted">
+                Every single-document tool stays free. Pro exists so high-volume batch work, saved macros and commercial offline deployments can
+                fund the project without metering ordinary use.
+              </p>
+              <ul className="mt-4 grid gap-2">
+                {[
+                  `Batch more than ${FREE_BATCH_LIMIT} files per run`,
+                  `Save more than ${FREE_WORKFLOW_LIMIT} custom workflow pipeline${FREE_WORKFLOW_LIMIT === 1 ? "" : "s"}`,
+                  "Commercial / Offline Team PWA Mode",
+                  "Priority support and early tools",
+                ].map((item) => (
+                  <li key={item} className="flex items-start gap-2 text-[12.5px] text-ink/70">
+                    <Check className="mt-0.5 h-3.5 w-3.5 shrink-0 text-forest" /> {item}
+                  </li>
+                ))}
+              </ul>
+              <div className="mt-5 flex flex-wrap items-center gap-2">
+                {pro.isPro ? (
+                  <span className="inline-flex h-10 items-center gap-1.5 rounded-xl bg-lime/40 px-3 text-[12px] font-semibold text-forest">
+                    <Check className="h-3.5 w-3.5" /> Pro is active on this device
+                  </span>
+                ) : (
+                  <>
+                    <button type="button" onClick={pro.openActivation} className="inline-flex h-10 items-center gap-1.5 rounded-xl bg-ink px-4 text-[12.5px] font-semibold text-paper">
+                      Activate license
+                    </button>
+                    <button type="button" onClick={() => pro.openUpgrade("See what Paperly Pro adds.")} className="inline-flex h-10 items-center gap-1.5 rounded-xl border border-line px-4 text-[12.5px] font-medium hover:border-forest/30">
+                      See Pro features
+                    </button>
+                  </>
+                )}
+              </div>
+              <div className="mt-4 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-line bg-bone/50 px-3 py-2.5">
+                <div>
+                  <p className="flex items-center gap-1.5 text-[11.5px] font-semibold">Commercial / Offline Team PWA Mode</p>
+                  <p className="mt-0.5 text-[10.5px] text-muted">
+                    {pro.teamPwaEnabled ? "Enabled on this device — the full toolkit remains available offline." : "Installable, air-gapped workspace for team deployment."}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => pro.enableTeamPwa()}
+                  className={`inline-flex h-8 items-center gap-1 rounded-lg px-2.5 text-[11px] font-semibold ${pro.teamPwaEnabled ? "bg-lime/40 text-forest" : "bg-forest text-paper"}`}
+                >
+                  {pro.teamPwaEnabled ? <><Check className="h-3 w-3" /> Enabled</> : "Enable"}
+                </button>
+              </div>
+              {!pro.isPro && pro.devMode && <p className="mt-2 text-[10.5px] text-muted">Development build: use key PAPERLY-DEV to test activation.</p>}
+            </div>
+
             <div className="rounded-2xl border border-line bg-bone-deep/40 p-5">
               <p className="flex items-center gap-1.5 text-[10.5px] font-bold uppercase tracking-[0.12em] text-ink/75">
                 <Heart className="h-3.5 w-3.5" /> Why it can be free
@@ -731,11 +797,11 @@ export function HelpPage() {
         <div className="container-page">
           <div className="grid gap-3 sm:grid-cols-3">
             {[
-              { title: "Password-protected file?", body: "Remove the password locally, then use the document anywhere.", href: "#/tool/unlock", icon: KeyRound },
-              { title: "Scanned PDF?", body: "Compress it, convert it to images, or build slides from it.", href: "#/tool/pdf-to-jpg", icon: FileText },
-              { title: "Damaged file?", body: "Try the repair tool to rebuild readable pages.", href: "#/tool/repair", icon: ShieldCheck },
-              { title: "Many files at once?", body: "Use unlimited local batch processing and download a ZIP.", href: "#/tool/batch", icon: Layers },
-              { title: "Summarise a report?", body: "Get the key passages locally, without uploading the document.", href: "#/tool/summarize", icon: Sparkles },
+              { title: "Password-protected file?", body: "Remove the password locally, then use the document anywhere.", href: "/unlock-pdf", icon: KeyRound },
+              { title: "Scanned PDF?", body: "Compress it, convert it to images, or build slides from it.", href: "/pdf-to-jpg", icon: FileText },
+              { title: "Damaged file?", body: "Try the repair tool to rebuild readable pages.", href: "/repair-pdf", icon: ShieldCheck },
+              { title: "Many files at once?", body: "Use unlimited local batch processing and download a ZIP.", href: "/batch-pdf", icon: Layers },
+              { title: "Summarise a report?", body: "Get the key passages locally, without uploading the document.", href: "/summarize-pdf", icon: Sparkles },
             ].map((card) => (
               <a key={card.title} href={card.href} className="group rounded-xl border border-line bg-paper p-4 transition-colors hover:border-forest/30">
                 <card.icon className="h-4 w-4 text-forest" />
@@ -809,7 +875,7 @@ export function HelpPage() {
                   const tool = getTool(id)!;
                   return (
                     <li key={id}>
-                      <a href={`#/tool/${id}`} className="flex items-center justify-between rounded-lg px-1 py-1.5 text-[12px] font-medium text-ink/75 hover:text-forest">
+                      <a href={toolPath(id)} className="flex items-center justify-between rounded-lg px-1 py-1.5 text-[12px] font-medium text-ink/75 hover:text-forest">
                         {tool.name} <ArrowRight className="h-3 w-3" />
                       </a>
                     </li>
@@ -919,8 +985,8 @@ export function NotFoundPage() {
         The link may be old, but the tools are all still here — and they still don’t upload anything.
       </p>
       <div className="mt-6 flex gap-2">
-        <a href="#/" className="inline-flex h-11 items-center rounded-xl bg-ink px-5 text-[13.5px] font-medium text-paper">Back home</a>
-        <a href="#/tools" className="inline-flex h-11 items-center gap-1.5 rounded-xl border border-line bg-paper px-5 text-[13.5px] font-medium">
+        <a href="/" className="inline-flex h-11 items-center rounded-xl bg-ink px-5 text-[13.5px] font-medium text-paper">Back home</a>
+        <a href="/tools" className="inline-flex h-11 items-center gap-1.5 rounded-xl border border-line bg-paper px-5 text-[13.5px] font-medium">
           All tools <ArrowRight className="h-4 w-4" />
         </a>
       </div>

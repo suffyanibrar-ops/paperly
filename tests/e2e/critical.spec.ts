@@ -38,24 +38,25 @@ test.describe("critical PDF workflows", () => {
     page.on("console", (message) => { if (message.type() === "error") errors.push(message.text()); });
     await page.goto("/");
     await expect(page.locator("h1")).toContainText("Every PDF tool");
-    await page.goto("/#/tools");
-    await expect(page.locator('a[href^="#/tool/"]').first()).toBeVisible();
-    const unique = await page.locator('a[href^="#/tool/"]').evaluateAll((els) => new Set(els.map((el) => el.getAttribute("href"))).size);
+    await page.goto("/tools");
+    await expect(page.locator("[data-tool-id]").first()).toBeVisible();
+    const unique = await page.locator("[data-tool-id]").evaluateAll((els) => new Set(els.map((el) => el.getAttribute("data-tool-id"))).size);
     expect(unique).toBe(51);
     expect(errors).toEqual([]);
   });
 
   test("prerendered tool page is crawlable with unique metadata and structured data", async ({ request }) => {
-    const response = await request.get("/tool/merge");
+    const response = await request.get("/merge-pdf");
     expect(response.status()).toBe(200);
     const html = await response.text();
     expect(html).toContain("<title>Merge PDF — free and private, right in your browser | Paperly PDF</title>");
-    expect(html).toContain('<link rel="canonical" href="https://paperlypdf.netlify.app/tool/merge" />');
+    expect(html).toContain('<link rel="canonical" href="https://paperlypdf.com/merge-pdf" />');
     expect(html).toMatch(/<h1>Merge PDF<\/h1>/);
     expect(html).toMatch(/application\/ld\+json/);
     expect(await (await request.get("/robots.txt")).text()).toContain("Sitemap:");
     const xml = await (await request.get("/sitemap.xml")).text();
-    expect((xml.match(/<url>/g) ?? []).length).toBeGreaterThanOrEqual(62);
+    expect((xml.match(/<url>/g) ?? []).length).toBeGreaterThanOrEqual(63);
+    expect(xml).toContain("https://paperlypdf.com/merge-pdf");
     const headers = (await request.get("/")).headers();
     expect(headers["content-security-policy"]).toContain("object-src 'none'");
     expect(headers["x-content-type-options"]).toBe("nosniff");

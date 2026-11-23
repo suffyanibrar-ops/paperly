@@ -46,6 +46,8 @@ import { useToolPreferences } from "@/lib/prefs";
 import { JobCancelledError, describeJobTime, useJob } from "@/lib/job";
 import { useDownloadShortcut, usePrimaryShortcut } from "@/lib/hotkeys";
 import { downloadOutput } from "@/lib/output";
+import { FREE_BATCH_LIMIT, FREE_WORKFLOW_LIMIT, ProBadge, usePro } from "@/lib/pro";
+import { deleteWorkflow, listWorkflows, saveWorkflow, type SavedWorkflow } from "@/lib/workflows";
 
 /* ================================================================== *
  * PDF WORKFLOW — chain several operations over one or many PDFs
@@ -378,8 +380,9 @@ const WORKFLOW_DEFAULTS = { merge: false };
 
 export function WorkflowTool() {
   const initial = useInitialFiles();
+  const pro = usePro();
   const opts = useToolPreferences("workflow", WORKFLOW_DEFAULTS);
-  const [files, setFiles] = useState<File[]>(initial);
+  const [files, setFiles] = useState<File[]>(() => initial.slice(0, pro.isPro ? MAX_FILES : FREE_BATCH_LIMIT));
   const [steps, setSteps] = useState<Step[]>([]);
   const [password, setPassword] = useState("");
   const [inputError, setInputError] = useState("");
@@ -391,6 +394,11 @@ export function WorkflowTool() {
   const pageCounts = useRef(new Map<string, number>());
   const loadRef = useRef<HTMLInputElement | null>(null);
   const job = useJob<WorkflowResult>();
+  const [saved, setSaved] = useState<SavedWorkflow[]>(() => listWorkflows());
+  const [workflowName, setWorkflowName] = useState("");
+  const [savedNotice, setSavedNotice] = useState("");
+  const [autoRunId, setAutoRunId] = useState<string | null>(null);
+  const runRef = useRef<() => void>(() => undefined);
 
   const merge = opts.value.merge;
   const signature = JSON.stringify({
@@ -440,7 +448,64 @@ export function WorkflowTool() {
 
   const addFiles = (incoming: File[]) => {
     const pdfs = incoming.filter((file) => /\.pdf$/i.test(file.name) || file.type === "application/pdf");
-    setFiles((current) => [...current, ...pdfs].slice(0, MAX_FILES));
+    const cap = pro.isPro ? MAX_FILES : FREE_BATCH_LIMIT;
+    if (files.length + pdfs.length > cap) {
+      pro.openUpgrade(
+        pro.isPro
+          ? `A workflow runs up to ${MAX_FILES} PDFs at once.`
+          : `Workflows over ${FREE_BATCH_LIMIT} files are part of Paperly Pro. Every single-file tool remains free.`,
+      );
+    }
+    setFiles([...files, ...pdfs].slice(0, cap));
+  };
+
+  const refreshSaved = () => setSaved(listWorkflows());
+
+  const saveNamedWorkflow = () => {
+    if (steps.length < 2) {
+      setInputError("A reusable workflow needs at least 2 steps. Add another operation first.");
+      return;
+    }
+    const existing = saved.find((entry) => entry.name.toLowerCase() === workflowName.trim().toLowerCase());
+    if (!existing && !pro.isPro && saved.length >= FREE_WORKFLOW_LIMIT) {
+      pro.openUpgrade(`Saving more than ${FREE_WORKFLOW_LIMIT} custom workflow pipeline${FREE_WORKFLOW_LIMIT === 1 ? "" : "s"} is part of Paperly Pro.`);
+      return;
+    }
+    const record = saveWorkflow({
+      id: existing?.id,
+      name: workflowName.trim() || `Workflow ${saved.length + 1}`,
+      merge,
+      steps: steps.map((step) => ({ ...step, id: undefined })),
+    });
+    if (!record) {
+      setInputError("This browser blocked local storage, so the workflow couldn’t be saved.");
+      return;
+    }
+    refreshSaved();
+    setWorkflowName(record.name);
+    setInputError("");
+    setSavedNotice(`Saved “${record.name}” to this browser. It never leaves your device.`);
+  };
+
+  const loadNamedWorkflow = (entry: SavedWorkflow, runNow = false) => {
+    try {
+      const loaded = entry.steps.slice(0, MAX_STEPS).map((raw, index) => normalizeStep((raw ?? {}) as Partial<Step>, index));
+      if (!loaded.length) throw new Error("That workflow has no steps.");
+      setSteps(loaded);
+      opts.set("merge", entry.merge);
+      setWorkflowName(entry.name);
+      setSavedNotice("");
+      setInputError("");
+      if (runNow) setAutoRunId(entry.id);
+    } catch (err) {
+      setInputError(friendlyProcessingError(err, "That saved workflow couldn’t be loaded."));
+    }
+  };
+
+  const removeNamedWorkflow = (entry: SavedWorkflow) => {
+    deleteWorkflow(entry.id);
+    refreshSaved();
+    setSavedNotice(`Deleted “${entry.name}” from this browser.`);
   };
 
   const savePipeline = () => {
@@ -640,7 +705,20 @@ export function WorkflowTool() {
 
   const result = job.result;
   const fresh = Boolean(result) && result?.signature === signature;
+  runRef.current = () => void run();
   usePrimaryShortcut(() => void run(), Boolean(files.length) && Boolean(steps.length) && !job.busy);
+  useEffect(() => {
+    if (!autoRunId) return;
+    if (!files.length || !steps.length) {
+      setAutoRunId(null);
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      setAutoRunId(null);
+      runRef.current();
+    }, 120);
+    return () => window.clearTimeout(timer);
+  }, [autoRunId, files.length, steps.length]);
   useDownloadShortcut(
     () => {
       if (result?.merged) downloadOutput(result.bytes, result.name, "application/pdf");
@@ -755,6 +833,62 @@ export function WorkflowTool() {
             )}
           </div>
         </div>
+        <div className="mb-3 rounded-xl border border-line bg-bone/40 p-3">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <p className="flex items-center gap-1 text-[10.5px] font-bold uppercase tracking-[0.08em] text-ink/70">
+              <WorkflowIcon className="h-3 w-3 text-forest" /> Saved workflows
+              {!pro.isPro && <ProBadge />}
+            </p>
+            <span className="ml-auto font-mono text-[10px] text-ink/60">
+              {saved.length}/{pro.isPro ? "∞" : FREE_WORKFLOW_LIMIT}
+            </span>
+          </div>
+          {saved.length > 0 && (
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              {saved.map((entry) => (
+                <span key={entry.id} className="inline-flex items-center gap-1 rounded-lg border border-line bg-paper py-1 pl-2 pr-1 text-[11px] font-medium">
+                  <button type="button" onClick={() => loadNamedWorkflow(entry)} className="max-w-[150px] truncate hover:text-forest" title={`Load ${entry.name}`}>
+                    {entry.name}
+                  </button>
+                  <button
+                    type="button"
+                    aria-label={`Run ${entry.name}`}
+                    title="Load and run now"
+                    onClick={() => loadNamedWorkflow(entry, true)}
+                    disabled={!files.length}
+                    className="rounded p-0.5 text-forest hover:bg-lime/30 disabled:opacity-30"
+                  >
+                    <Play className="h-3 w-3" />
+                  </button>
+                  <button type="button" aria-label={`Delete ${entry.name}`} title="Delete" onClick={() => removeNamedWorkflow(entry)} className="rounded p-0.5 text-ink/50 hover:bg-clay/10 hover:text-clay-ink">
+                    <X className="h-3 w-3" />
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
+          <div className="mt-2 flex flex-wrap items-center gap-1.5">
+            <input
+              value={workflowName}
+              onChange={(event) => { setWorkflowName(event.target.value.slice(0, 80)); setSavedNotice(""); }}
+              placeholder="Name this workflow (e.g. Merge → OCR → Compress)"
+              aria-label="Workflow name"
+              className="h-8 min-w-[180px] flex-1 rounded-lg border border-line bg-paper px-2.5 text-[11.5px] text-ink placeholder:text-ink/40 focus:border-forest/40 focus:outline-none"
+            />
+            <button
+              type="button"
+              onClick={saveNamedWorkflow}
+              className="inline-flex h-8 items-center gap-1 rounded-lg bg-forest px-2.5 text-[11px] font-semibold text-paper"
+            >
+              <Plus className="h-3 w-3" /> Save workflow
+            </button>
+          </div>
+          {savedNotice && <p className="mt-1.5 text-[10.5px] font-medium text-forest">{savedNotice}</p>}
+          <p className="mt-1.5 text-[10px] leading-relaxed text-muted">
+            Saved macros live in this browser only. Files and passwords are never stored — load a macro, drop files, and press Run.
+          </p>
+        </div>
+
         <div className="mb-2 flex flex-wrap gap-1.5">
           {STEP_ORDER.map((kind) => {
             const meta = STEP_META[kind];

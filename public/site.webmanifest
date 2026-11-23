@@ -1,6 +1,6 @@
 {
   "id": "/",
-  "name": "Paperly PDF — private in-browser PDF tools",
+  "name": "Paperly PDF \u2014 private in-browser PDF tools",
   "short_name": "Paperly",
   "description": "51 private PDF tools that run entirely in your browser: merge, compress, OCR, redact, convert, sign and fill forms. Files never leave your device.",
   "lang": "en",
@@ -8,11 +8,18 @@
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
-  "display_override": ["standalone", "minimal-ui"],
+  "display_override": [
+    "standalone",
+    "minimal-ui"
+  ],
   "orientation": "any",
   "background_color": "#f7f4ec",
   "theme_color": "#12211a",
-  "categories": ["productivity", "utilities", "business"],
+  "categories": [
+    "productivity",
+    "utilities",
+    "business"
+  ],
   "icons": [
     {
       "src": "/icons/icon.svg",
@@ -31,17 +38,17 @@
     {
       "name": "Merge PDFs",
       "short_name": "Merge",
-      "url": "/#/tool/merge"
+      "url": "/merge-pdf"
     },
     {
       "name": "Compress a PDF",
       "short_name": "Compress",
-      "url": "/#/tool/compress"
+      "url": "/compress-pdf"
     },
     {
       "name": "OCR a scanned PDF",
       "short_name": "OCR",
-      "url": "/#/tool/ocr"
+      "url": "/ocr-pdf"
     }
   ]
 }

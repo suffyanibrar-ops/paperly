@@ -1131,9 +1131,9 @@ const SANITIZE_GROUPS: readonly SanitizeGroupSpec[] = [
   },
 ];
 
-type SanitizeOptions = Record<SanitizeGroupId, boolean>;
+export type SanitizeOptions = Record<SanitizeGroupId, boolean>;
 
-const DEFAULT_SANITIZE_OPTIONS: SanitizeOptions = {
+export const DEFAULT_SANITIZE_OPTIONS: SanitizeOptions = {
   scripts: true,
   attachments: true,
   metadata: true,
@@ -1522,7 +1522,7 @@ function countSanitizeStructures(doc: PDFDocument): Record<SanitizeGroupId, Stru
  * Remove the selected document-level structures, save, then reload the saved
  * bytes and confirm every selected structure is genuinely absent.
  */
-async function sanitizePdf(
+export async function sanitizePdf(
   bytes: ArrayBuffer | Uint8Array,
   options: SanitizeOptions,
   onProgress: (value: number) => void,

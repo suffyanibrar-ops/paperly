@@ -4,7 +4,7 @@
 
 A commercial-grade, privacy-first PDF platform. **51 working tools** run inside the browser — documents are never uploaded to a server.
 
-Production: <https://paperlypdf.netlify.app/>
+Production: <https://paperlypdf.com/>
 
 ## What it does
 
@@ -13,7 +13,8 @@ Production: <https://paperlypdf.netlify.app/>
 - **Optimize** — compress (including a **target file size** mode), repair, flatten, extract images, archive readiness.
 - **Secure** — AES-256 protect/unlock, redact, find & redact by pattern, fill forms, create forms, sign, watermark, sanitize active content and metadata.
 - **Intelligence** — extract text, OCR (18 languages), compare versions, summarise, ask a question across documents, inspect a PDF’s full structure and risk surface.
-- **Platform** — command palette and keyboard shortcuts, locally generated sample documents, remembered tool settings, cancellable jobs with progress/ETA, a result panel that can **rename, preview, copy, share and checksum** before download, local activity history, batch processing, installable offline PWA, no account, no uploads, no daily limits.
+- **Platform** — clean crawlable URLs for all 51 tools, light/dark mode, a smart dropzone that inspects a PDF locally (pages, encryption, text layer) before recommending a tool, a Cmd/Ctrl+K fuzzy command palette, saved workflow macros in localStorage, batch ZIP exports (compress, watermark, protect, rotate, number, flatten, sanitize, OCR and PDF→JPG), an installable offline PWA, and locally generated sample documents. No account, no uploads, no daily limits.
+- **Pro (optional)** — all 51 single-document tools stay free. Paperly Pro adds batch runs over three files, more than one saved workflow, and commercial/offline Team PWA mode. Keys are validated once against Lemon Squeezy and cached as a signed offline token.
 
 Every tool also has an **Advanced options** panel with persisted settings and a shared **page picker** (thumbnails, shift-click ranges, odd/even, typed ranges).
 
@@ -22,7 +23,7 @@ Every tool also has an **Advanced options** panel with persisted settings and a 
 | Layer | Technology |
 | --- | --- |
 | UI | React 19 + TypeScript, Tailwind CSS 4, Vite 7 |
-| Routing | Hash routes for resilient static hosting + real path URLs for the prerendered Netlify deployment; route-level `React.lazy` splitting |
+| Routing | Clean crawlable paths (`/merge-pdf`, `/tools`, `/privacy`) plus legacy hash/`/tool/:id` compatibility; real path navigation via the History API; route-level `React.lazy` splitting |
 | PDF engine | PDF.js 6.2.108 **legacy build** (render, text, outline; ships iterator-helper/withResolvers polyfills for Safari), `@cantoo/pdf-lib` 2.11.1 (rewrite, AES-256, forms, outline writing) |
 | Shared engines | `job` (progress/ETA/cancel/retry), `prefs` (versioned local settings), `pageQuery` (ranges, odd/even/last/steps), `output` (naming, MIME, preview data, SHA-256), `sample` (local demo documents) |
 | UX layer | `AdvancedOptions` presets/panels, `PagePicker`, `OutputPreview`, shared `DownloadPanel` (rename/preview/copy/share/checksum) |
@@ -32,7 +33,7 @@ Every tool also has an **Advanced options** panel with persisted settings and a 
 | HTML sanitisation | DOMPurify 3.4.17 with a strict tag/attribute allowlist and CSS property allowlist |
 | Offline | Hand-written service worker generated at build time (`scripts/build-sw.mjs`): precached shell + hashed assets + PDF.js worker + fonts, network-first navigations, cache-first assets |
 | Fonts | Self-hosted WOFF2 (Inter Tight, Instrument Serif) — no font CDN request |
-| Build | `vite build` → hashed chunks in `dist/assets` → `scripts/copy-worker.cjs` → `scripts/prerender.mjs` writes 62 static SEO routes → `scripts/build-sw.mjs` writes `dist/sw.js` |
+| Build | `vite build` → hashed chunks in `dist/assets` → `scripts/copy-worker.cjs` → `scripts/prerender.mjs` writes 63 static SEO routes, sitemap, robots and legacy redirects → `scripts/build-sw.mjs` writes `dist/sw.js` |
 | CI | GitHub Actions: typecheck, lint, unit tests, coverage gate, production build, Playwright matrix |
 
 ### Performance
@@ -58,6 +59,11 @@ src/lib/redactPatterns.ts pattern presets, matching, Luhn/IBAN validation, repor
 src/lib/outline.ts       outline tree flattening, split ranges, heading detection, outline writing
 src/lib/tables.ts        table region/column detection, cell assembly, RFC-4180 CSV
 src/lib/toolRegistry.ts  single source of truth for all 51 tools (also parsed by the prerenderer)
+src/lib/slugs.ts         canonical public URL slugs for every tool
+src/lib/groups.ts        six discovery groups, aliases and fuzzy search scoring
+src/lib/pro.tsx          offline-signed Pro license, Lemon Squeezy validation and upgrade UI
+src/lib/workflows.ts     localStorage workflow macros (definitions only, never files)
+src/lib/localInspect.ts  local page-count/encryption/text-layer inspection for the hero
 src/lib/job.ts           cancellable job runner (progress, ETA, retry, normalised errors)
 src/lib/prefs.ts         versioned, namespaced local settings with safe fallbacks
 src/lib/pageQuery.ts     page-range parser (odd/even/last/steps) used by every range field
@@ -66,7 +72,7 @@ src/lib/sample.ts         locally generated sample PDF/scan/Markdown/CSV/HTML/te
 src/components/           shared UI: AdvancedOptions, PagePicker, OutputPreview, DownloadPanel
 src/tools/               tool implementations grouped by domain
 src/pages/               marketing, legal, help, guides, comparison and activity pages
-scripts/prerender.mjs    static SEO generation (titles, canonicals, OG, JSON-LD, sitemap, OG image)
+scripts/prerender.mjs    static SEO generation (51 tool slugs, titles, canonicals, OG, SoftwareApplication + FAQPage JSON-LD, sitemap, robots, redirects)
 scripts/build-sw.mjs     offline service-worker/precache manifest generation
 scripts/serve-dist.cjs   production-parity QA server (applies netlify.toml CSP/security headers)
 docs/                    research, architecture, tool matrix and production-readiness docs
@@ -76,8 +82,8 @@ tests/e2e                Playwright output-verification suites
 
 ## Testing
 
-- `tests/unit` — 313 Vitest tests. `security.ts` is coverage-gated at 70%; text geometry, retrieval ranking, redaction patterns, outline math, table/CSV generation and app registry all have dedicated suites. A registry consistency test enforces 51 unique tools, valid related-tool links and **a renderer for every registered tool**.
-- `tests/e2e` — 77 Playwright tests against a production-parity server (real CSP, gzip, prerendered routes). `matrix-a.spec.ts` and `matrix-b.spec.ts` exercise every registered tool with generated-output assertions (page counts, extracted text, form values, encryption, ZIP contents, image signatures, metadata, outline targets, CSV cells) plus malformed-input, malicious-archive, wrong-password and 120-page large-file cases. `power.spec.ts` covers the eight newest tools end-to-end plus the offline service worker. The full suite is **77 tests** (critical 8, matrix-a 25, matrix-b 26, power 12, platform 3, accessibility 1, mobile 2) and runs green in ~2 minutes against the production build. The platform suite verifies the shared result panel (sample → rename → preview → checksum → download name), the extended page-query syntax, and that all 51 tools mount with their advanced options open and **zero console errors**. The accessibility suite runs axe-core WCAG 2.2 A/AA checks on the shell, catalogue, help, activity and representative tool pages.
+- `tests/unit` — 320 Vitest tests, including canonical slug/redirect and discovery-group coverage. `security.ts` is coverage-gated at 70%; text geometry, retrieval ranking, redaction patterns, outline math, table/CSV generation and app registry all have dedicated suites. A registry consistency test enforces 51 unique tools, valid related-tool links and **a renderer for every registered tool**.
+- `tests/e2e` — 87 Playwright tests against a production-parity server (real CSP, gzip, prerendered routes). `matrix-a.spec.ts` and `matrix-b.spec.ts` exercise every registered tool with generated-output assertions (page counts, extracted text, form values, encryption, ZIP contents, image signatures, metadata, outline targets, CSV cells) plus malformed-input, malicious-archive, wrong-password and 120-page large-file cases. `power.spec.ts` covers the eight newest tools end-to-end plus the offline service worker. The full suite is **87 tests** (critical 8, features 10, matrix-a 25, matrix-b 26, power 12, platform 3, accessibility 1, mobile 2) and runs green in ~2 minutes against the production build. The platform suite verifies the shared result panel (sample → rename → preview → checksum → download name), the extended page-query syntax, and that all 51 tools mount with their advanced options open and **zero console errors**. The accessibility suite runs axe-core WCAG 2.2 A/AA checks on the shell, catalogue, help, activity and representative tool pages.
 - Every tool is verified by its **output**, not by whether a button rendered.
 
 ## Commands
@@ -124,7 +130,7 @@ node scripts/e2e-fixtures.cjs  # regenerate the synthetic PDF/DOCX fixtures
 - Activity history stores tool name, output filename, pages, size and timestamp under `paperly.activity.v1`; clear it from **Activity**.
 - Tool options are remembered under versioned `paperly.prefs.v1.*` keys (quality, layout, style only). **Activity → Reset settings** clears them all.
 - Saved signatures are **opt-in and off by default**; when enabled, up to six signature images stay in this browser’s local storage and can be forgotten individually or all at once. They are never uploaded.
-- The app works fully offline after the first visit: the service worker precaches the shell, every hashed asset, the PDF.js worker and the self-hosted fonts. Navigations fall back to the cached shell when the network is unavailable.
+- The app works fully offline after the first visit: the service worker precaches the shell, every prerendered route, every hashed asset, the PDF.js worker and the self-hosted fonts. Direct visits to any tool slug keep working with Wi-Fi off.
 
 ## Known, disclosed limitations
 
@@ -140,10 +146,10 @@ node scripts/e2e-fixtures.cjs  # regenerate the synthetic PDF/DOCX fixtures
 ## Deployment (Netlify)
 
 1. Connect the repository; Netlify reads `netlify.toml` (`npm run build`, publish `dist`).
-2. Set `PAPERLY_ORIGIN=https://paperlypdf.netlify.app` (or the custom domain) so canonical URLs and the sitemap use the correct host.
-3. Deploy, then verify headers with `curl -I https://<domain>/` and confirm `/sitemap.xml`, `/robots.txt`, `/pdf.worker.min.mjs`, `/sw.js`, `/fonts/*.woff2` and a prerendered route such as `/tool/merge`. The previous deployment served none of these — a redeploy is required after source changes.
+2. Set `SITE_URL=https://paperlypdf.com` (or `VITE_SITE_URL` for Vite-prefixed setups) so canonical URLs, OG tags, the sitemap and robots.txt use the correct host. The client and prerenderer share this one variable.
+3. Deploy, then verify headers with `curl -I https://<domain>/` and confirm `/sitemap.xml`, `/robots.txt`, `/pdf.worker.min.mjs`, `/sw.js`, `/fonts/*.woff2` and a prerendered route such as `/merge-pdf` (with `/tool/merge` 301-redirecting to it). A redeploy is required after source changes.
 4. Verify the offline path: load the site once, go offline in DevTools, reload, and confirm the shell and a previously opened tool load.
-5. No private environment variables are read by client code; do not add secrets to Vite variables.
+5. `VITE_PRO_DEV_MODE=true` enables the Pro bypass for local testing only; never enable it in production. Optional Pro settings: `VITE_PRO_LICENSE_ENDPOINT` and `VITE_PRO_CHECKOUT_URL`. Do not add private secrets to Vite variables.
 
 ## Reporting security issues
 

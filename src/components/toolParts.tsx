@@ -83,7 +83,7 @@ export function SinglePdfInput({
         <Alert tone="error" title="That file won’t open">
           {state.error}{" "}
           {state.needsPassword && (
-            <a href="#/tool/unlock" className="font-semibold underline">
+            <a href="/unlock-pdf" className="font-semibold underline">
               Open Unlock PDF
             </a>
           )}
@@ -236,7 +236,7 @@ export function ResultFacts({ facts }: { facts: { label: string; value: string }
       {facts.map((fact) => (
         <span key={fact.label} className="flex items-center gap-1.5">
           <span className="text-paper/45">{fact.label}</span>
-          <span className="font-semibold text-paper/90">{fact.value}</span>
+          <span className="font-mono text-[11px] font-semibold text-paper/90">{fact.value}</span>
         </span>
       ))}
     </div>

@@ -718,6 +718,9 @@ export function RedactTool() {
                     ? "Marked areas become solid bars. The page is rebuilt as an image, so nothing underneath survives."
                     : "Marked areas are filled with the page’s background colour: the content disappears without a visible bar, and the flattened page keeps no text layer."}
                 </p>
+                <p className="mt-2 rounded-lg border border-forest/15 bg-lime/20 px-2 py-1.5 text-[10px] font-medium leading-snug text-forest">
+                  True burn is always on: every page with a redaction is rasterized, and the original text objects are never copied into the output.
+                </p>
                 <div className="mt-3 space-y-3">
                   {prefs.value.mode === "blackout" && (
                     <Field label="Box colour">

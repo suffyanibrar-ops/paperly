@@ -349,10 +349,10 @@ export default function VersusPage() {
         description="iLovePDF is a mature, well-run suite with excellent brand trust, native apps and cloud AI features. Paperly is smaller and newer, but it does something iLovePDF cannot: process the document without ever uploading it. Here is the full picture, including where they are better."
       >
         <div className="mt-6 flex flex-wrap gap-2">
-          <a href="#/tools" className="inline-flex h-11 items-center gap-2 rounded-xl bg-ink px-5 text-[13.5px] font-medium text-paper hover:bg-forest-soft">
+          <a href="/tools" className="inline-flex h-11 items-center gap-2 rounded-xl bg-ink px-5 text-[13.5px] font-medium text-paper hover:bg-forest-soft">
             Try Paperly free <ArrowRight className="h-4 w-4 text-lime" />
           </a>
-          <a href="#/pricing" className="inline-flex h-11 items-center gap-2 rounded-xl border border-ink/15 px-5 text-[13.5px] font-medium hover:bg-paper">
+          <a href="/pricing" className="inline-flex h-11 items-center gap-2 rounded-xl border border-ink/15 px-5 text-[13.5px] font-medium hover:bg-paper">
             See pricing
           </a>
         </div>

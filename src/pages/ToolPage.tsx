@@ -1,6 +1,7 @@
 import { ArrowRight, Info, ShieldCheck } from "lucide-react";
 import { Suspense, lazy, type ComponentType, type LazyExoticComponent } from "react";
 import { getTool, type Tool } from "@/lib/toolRegistry";
+import { toolPath } from "@/lib/slugs";
 import { Spinner, ToolShell, ToolTile } from "@/components/ui";
 import { NotFoundPage } from "@/pages/Info";
 
@@ -23,7 +24,7 @@ function lazyTool<T extends Record<string, unknown>>(loader: () => Promise<T>, e
 const TOOL_COMPONENTS: Record<string, LazyExoticComponent<ComponentType>> = {
   merge: lazyTool(() => import("@/tools/Organize"), "MergeTool"),
   split: lazyTool(() => import("@/tools/Organize"), "SplitTool"),
-  organize: lazyTool(() => import("@/tools/Organize"), "OrganizeTool"),
+  organize: lazyTool(() => import("@/tools/UnifiedOrganize"), "UnifiedOrganizeTool"),
   rotate: lazyTool(() => import("@/tools/Organize"), "RotateTool"),
   crop: lazyTool(() => import("@/tools/Organize"), "CropTool"),
   compress: lazyTool(() => import("@/tools/Optimize"), "CompressTool"),
@@ -127,7 +128,7 @@ function WideAside({ tool }: { tool: Tool }) {
         <p className="mt-1 text-[11.5px] leading-relaxed text-paper/70">
           Rendering, editing and saving happen on your device. No upload request, no temporary server copy and no retention.
         </p>
-        <a href="#/privacy" className="mt-2 inline-flex items-center gap-1 text-[11.5px] font-semibold text-lime hover:underline">
+        <a href="/privacy" className="mt-2 inline-flex items-center gap-1 text-[11.5px] font-semibold text-lime hover:underline">
           Privacy promise <ArrowRight className="h-3 w-3" />
         </a>
       </div>
@@ -147,7 +148,7 @@ function WideAside({ tool }: { tool: Tool }) {
                 const related = getTool(id);
                 if (!related) return null;
                 return (
-                  <a key={id} href={`#/tool/${id}`} className="flex items-center gap-2 rounded-lg px-1 py-1 text-[12px] font-medium hover:bg-bone-deep/50">
+                  <a key={id} href={toolPath(id)} className="flex items-center gap-2 rounded-lg px-1 py-1 text-[12px] font-medium hover:bg-bone-deep/50">
                     <ToolTile tool={related} size="sm" />
                     {related.name}
                     <ArrowRight className="ml-auto h-3 w-3 text-ink/70" />

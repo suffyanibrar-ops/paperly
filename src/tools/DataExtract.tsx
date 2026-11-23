@@ -449,7 +449,7 @@ export function TablesToCsvTool() {
             <Alert tone="error">
               {job.error}{" "}
               {/OCR|scan/i.test(job.error) && (
-                <a href="#/tool/ocr" className="font-semibold underline">
+                <a href="/ocr-pdf" className="font-semibold underline">
                   Open OCR PDF
                 </a>
               )}
@@ -477,7 +477,7 @@ export function TablesToCsvTool() {
                 <Alert tone="warning" title="Rotated pages were skipped">
                   Page{scan.rotatedPages.length === 1 ? "" : "s"} {rotateList(scan.rotatedPages)} are rotated, so column order
                   is unreliable. Use{" "}
-                  <a href="#/tool/rotate" className="font-semibold underline">
+                  <a href="/rotate" className="font-semibold underline">
                     Rotate PDF
                   </a>{" "}
                   to straighten them, then scan again.
@@ -627,15 +627,15 @@ export function TablesToCsvTool() {
                   </Alert>
                   <EmptyHint>
                     Scanned pages have no text layer: run{" "}
-                    <a href="#/tool/ocr" className="font-semibold text-forest underline">
+                    <a href="/ocr-pdf" className="font-semibold text-forest underline">
                       OCR PDF
                     </a>{" "}
                     first. You can also try{" "}
-                    <a href="#/tool/pdf-to-excel" className="font-semibold text-forest underline">
+                    <a href="/pdf-to-excel" className="font-semibold text-forest underline">
                       PDF to Excel
                     </a>{" "}
                     or{" "}
-                    <a href="#/tool/extract-text" className="font-semibold text-forest underline">
+                    <a href="/extract-text" className="font-semibold text-forest underline">
                       Extract text
                     </a>{" "}
                     for loosely structured pages.

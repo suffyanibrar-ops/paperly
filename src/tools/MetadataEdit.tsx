@@ -495,7 +495,7 @@ export function MetadataTool() {
           {xmp && (
             <Alert tone="warning" title="This PDF also contains XMP metadata">
               XMP is a second metadata store used by Adobe tools and archival workflows. Info fields edited here do not guarantee the XMP copy is
-              updated. Use <a href="#/tool/sanitize" className="font-semibold underline">Sanitize PDF</a> to remove XMP entirely, or turn on “Strip the XMP
+              updated. Use <a href="/sanitize-pdf" className="font-semibold underline">Sanitize PDF</a> to remove XMP entirely, or turn on “Strip the XMP
               packet on save” below.
             </Alert>
           )}

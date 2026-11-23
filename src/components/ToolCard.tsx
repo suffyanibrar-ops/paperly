@@ -1,13 +1,15 @@
 import { ArrowUpRight } from "lucide-react";
 import { cn } from "@/utils/cn";
 import { CATEGORIES, type Tool } from "@/lib/toolRegistry";
+import { toolPath } from "@/lib/slugs";
 import { ToolTile } from "@/components/ui";
 
 export function ToolCard({ tool, showCategory = false, className }: { tool: Tool; showCategory?: boolean; className?: string }) {
   const cat = CATEGORIES[tool.category];
   return (
     <a
-      href={`#/tool/${tool.id}`}
+      href={toolPath(tool.id)}
+      data-tool-id={tool.id}
       className={cn(
         "group relative flex flex-col rounded-2xl border border-line bg-paper p-4 transition-all duration-200 hover:-translate-y-0.5 hover:border-forest/25 hover:shadow-soft",
         className,

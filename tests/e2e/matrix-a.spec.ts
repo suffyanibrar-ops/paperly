@@ -31,7 +31,7 @@ test("organize: delete one page and export", async ({ page }) => {
   await upload(page, fixture("sample.pdf"));
   await page.waitForTimeout(2500);
   await page.getByRole("button", { name: /Remove page 2/ }).click();
-  await clickAction(page, "Apply changes");
+  await clickAction(page, "Export final PDF");
   await waitSuccess(page, /pages are in order/);
   expect(await pdfPages(await saveDownload(page, "organize", /^Download/))).toBe(2);
 });

@@ -1,8 +1,11 @@
 import { Component, Suspense, lazy, useEffect, type ErrorInfo, type ReactNode } from "react";
 import { Header, Footer, BackToTop } from "@/components/Chrome";
-import { useRoute } from "@/lib/router";
+import { installLinkInterceptor, useRoute } from "@/lib/router";
 import { Alert, Spinner } from "@/components/ui";
-import { getTool, type ToolCategory } from "@/lib/toolRegistry";
+import { getTool } from "@/lib/toolRegistry";
+import type { ToolGroupId } from "@/lib/groups";
+import { toolIdFromPath, toolPath } from "@/lib/slugs";
+import { absoluteUrl } from "@/lib/site";
 
 /**
  * Route-level code splitting: the marketing shell (header, footer, styles,
@@ -56,7 +59,7 @@ class ToolErrorBoundary extends Component<{ children: ReactNode }, { error: Erro
               <button type="button" onClick={() => this.setState({ error: null })} className="h-11 rounded-xl bg-ink px-5 text-[13px] font-medium text-paper">
                 Try again
               </button>
-              <a href="#/tools" className="flex h-11 items-center rounded-xl border border-line bg-paper px-5 text-[13px] font-medium">
+              <a href="/tools" className="flex h-11 items-center rounded-xl border border-line bg-paper px-5 text-[13px] font-medium">
                 Choose another tool
               </a>
             </div>
@@ -73,6 +76,8 @@ export default function App() {
   const [pathname, search] = route.split("?");
   const params = new URLSearchParams(search ?? "");
   const path = pathname.replace(/\/+$/, "") || "/";
+  const toolId = toolIdFromPath(path);
+  const canonicalRoute = toolId ? toolPath(toolId) : path;
 
   useEffect(() => {
     const setMeta = (selector: string, attribute: string, value: string) => {
@@ -102,8 +107,8 @@ export default function App() {
     };
     let title: string;
     let description: string;
-    if (path.startsWith("/tool/")) {
-      const tool = getTool(path.replace("/tool/", ""));
+    if (toolId) {
+      const tool = getTool(toolId);
       title = tool ? `${tool.name} — free, private, in-browser | Paperly` : "Tool not found — Paperly";
       description = tool
         ? `${tool.tagline} ${tool.description} All processing happens in your browser — your file is never uploaded.`
@@ -122,20 +127,22 @@ export default function App() {
     document.title = title;
     setMeta('meta[name="description"]', "content", description.slice(0, 300));
     const canonical = document.head.querySelector<HTMLLinkElement>('link[rel="canonical"]');
-    const canonicalUrl = `https://paperlypdf.netlify.app${path === "/" ? "/" : path}`;
+    const canonicalUrl = absoluteUrl(canonicalRoute);
     if (canonical) canonical.href = canonicalUrl;
     document.head.querySelectorAll('meta[property="og:title"], meta[name="twitter:title"]').forEach((node) => node.setAttribute("content", title));
     document.head.querySelectorAll('meta[property="og:description"], meta[name="twitter:description"]').forEach((node) => node.setAttribute("content", description.slice(0, 200)));
     const ogUrl = document.head.querySelector('meta[property="og:url"]');
     if (ogUrl) ogUrl.setAttribute("content", canonicalUrl);
-  }, [path]);
+  }, [path, toolId, canonicalRoute]);
+
+  useEffect(() => installLinkInterceptor(), []);
 
   let page: ReactNode;
   if (path === "/" || path === "") page = <Home />;
   else if (path === "/tools") {
     const category = params.get("c");
-    page = <Tools initialCategory={(category as ToolCategory) || "all"} initialNew={params.get("new") === "1"} />;
-  } else if (path.startsWith("/tool/")) page = <ToolPage toolId={path.replace("/tool/", "")} />;
+    page = <Tools initialCategory={(category as ToolGroupId) || "all"} initialNew={params.get("new") === "1"} />;
+  } else if (toolId) page = <ToolPage toolId={toolId} />;
   else if (path === "/why") page = <WhyPage />;
   else if (path === "/privacy") page = <PrivacyPage />;
   else if (path === "/pricing") page = <PricingPage />;

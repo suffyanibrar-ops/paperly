@@ -157,17 +157,17 @@ export const TOOLS: Tool[] = [
   {
     id: "organize",
     name: "Organize PDF",
-    tagline: "Reorder, rotate and remove pages visually.",
+    tagline: "Merge several PDFs and rearrange every page in one grid.",
     description:
-      "See every page as a thumbnail. Drag to reorder, rotate or remove pages, then export a fresh PDF. No guessing with page numbers.",
+      "Drop one or many PDFs and see every page as a thumbnail. Drag to reorder across files, rotate, duplicate or delete pages, insert blanks and add split markers — then export one PDF or a ZIP of split documents.",
     category: "organize",
     icon: LayoutGrid,
     accepts: PDF,
     acceptLabel: "A PDF file",
     steps: [
-      "Add a PDF and let the page thumbnails render.",
-      "Drag pages, rotate them, or remove the ones you don’t need.",
-      "Apply and download your reorganized PDF.",
+      "Drop one or several PDFs — every page lands in the same visual grid.",
+      "Drag to reorder across files, rotate, duplicate, delete, insert blanks or add split markers.",
+      "Export one merged PDF, or a ZIP when you split the page sequence.",
     ],
     related: ["merge", "rotate", "split"],
     popular: true,

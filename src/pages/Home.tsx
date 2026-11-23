@@ -15,18 +15,21 @@ import {
   X,
   Zap,
 } from "lucide-react";
-import { useMemo, useState } from "react";
-import { CATEGORIES, POPULAR_IDS, TOOLS, getTool, type ToolCategory } from "@/lib/toolRegistry";
+import { useEffect, useMemo, useState } from "react";
+import { POPULAR_IDS, TOOLS, getTool } from "@/lib/toolRegistry";
+import { TOOL_GROUPS, searchScore, toolGroup, type ToolGroupId } from "@/lib/groups";
 import { useFavorites, useActivity, readableRecent } from "@/lib/activity";
 import { GUIDE_TEASERS } from "@/pages/More";
 import { fileExt, formatBytes } from "@/lib/format";
 import { startTool } from "@/lib/router";
+import { inspectPdfFile, recommendationsFor, type LocalPdfInspection } from "@/lib/localInspect";
+import { toolPath } from "@/lib/slugs";
 import { Accordion, AccordionItem, Badge, FileDrop } from "@/components/ui";
 import { ToolCard } from "@/components/ToolCard";
 import { cn } from "@/utils/cn";
 
 /* ------------------------------------------------------------------ *
- * Hero upload
+ * Hero upload + local inspection
  * ------------------------------------------------------------------ */
 function suggestionsFor(files: File[]): string[] {
   if (!files.length) return POPULAR_IDS;
@@ -44,7 +47,34 @@ function suggestionsFor(files: File[]): string[] {
 
 function HeroDrop() {
   const [files, setFiles] = useState<File[]>([]);
+  const [inspection, setInspection] = useState<LocalPdfInspection | null>(null);
+  const [inspecting, setInspecting] = useState(false);
+  const pdfFile = files.find((file) => /\.pdf$/i.test(file.name) || file.type === "application/pdf");
   const suggestions = useMemo(() => suggestionsFor(files), [files]);
+  const recommendations = useMemo(() => recommendationsFor(files, inspection), [files, inspection]);
+
+  useEffect(() => {
+    if (!pdfFile) {
+      setInspection(null);
+      setInspecting(false);
+      return;
+    }
+    let alive = true;
+    setInspecting(true);
+    setInspection(null);
+    inspectPdfFile(pdfFile)
+      .then((result) => alive && setInspection(result))
+      .catch(() => alive && setInspection(null))
+      .finally(() => alive && setInspecting(false));
+    return () => {
+      alive = false;
+    };
+  }, [pdfFile]);
+
+  const clear = () => {
+    setFiles([]);
+    setInspection(null);
+  };
 
   return (
     <div className="relative">
@@ -56,7 +86,7 @@ function HeroDrop() {
             </div>
             <div>
               <p className="text-[12.5px] font-semibold leading-none">Drop a file, pick a tool</p>
-              <p className="mt-1 text-[10.5px] text-muted">It never leaves this browser</p>
+              <p className="mt-1 text-[10.5px] text-muted">Inspected in this browser — never uploaded</p>
             </div>
           </div>
           <span className="flex items-center gap-1 rounded-full bg-lime/30 px-2 py-1 text-[9.5px] font-bold uppercase tracking-[0.08em] text-forest">
@@ -65,64 +95,101 @@ function HeroDrop() {
         </div>
 
         {files.length === 0 ? (
-          <FileDrop
-            accept="*"
-            acceptLabel="PDF, images, Word, Excel, PowerPoint"
-            multiple
-            compact
-            onFiles={setFiles}
-          />
+          <FileDrop accept="*" acceptLabel="PDF, images, Word, Excel, PowerPoint" multiple compact onFiles={setFiles} />
         ) : (
           <div className="animate-pop">
             <div className="rounded-xl border border-forest/15 bg-lime/15 px-3 py-2.5">
               <div className="flex items-start justify-between gap-2">
                 <div className="min-w-0">
-                  <p className="truncate text-[12.5px] font-semibold">
-                    {files.length === 1 ? files[0].name : `${files.length} files ready`}
-                  </p>
-                  <p className="mt-0.5 text-[10.5px] text-muted">
+                  <p className="truncate text-[12.5px] font-semibold">{files.length === 1 ? files[0].name : `${files.length} files ready`}</p>
+                  <p className="mt-0.5 font-mono text-[10.5px] text-muted">
                     {formatBytes(files.reduce((sum, f) => sum + f.size, 0))} · held in browser memory
                   </p>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => setFiles([])}
-                  aria-label="Clear selected files"
-                  className="rounded p-1 text-ink/75 hover:bg-ink/5 hover:text-ink"
-                >
+                <button type="button" onClick={clear} aria-label="Clear selected files" className="rounded p-1 text-ink/75 hover:bg-ink/5 hover:text-ink">
                   <X className="h-3.5 w-3.5" />
                 </button>
               </div>
               <div className="mt-2 flex flex-wrap gap-1">
                 {files.slice(0, 4).map((file) => (
-                  <span key={file.name} className="max-w-[160px] truncate rounded-full bg-paper px-2 py-0.5 text-[10px] font-medium text-ink/70">
+                  <span key={`${file.name}-${file.size}-${file.lastModified}`} className="max-w-[160px] truncate rounded-full bg-paper px-2 py-0.5 text-[10px] font-medium text-ink/70">
                     {file.name}
                   </span>
                 ))}
+                {files.length > 4 && <span className="rounded-full bg-paper px-2 py-0.5 text-[10px] font-medium text-ink/70">+{files.length - 4}</span>}
               </div>
             </div>
+
+            {pdfFile && (
+              <div className="mt-2.5 rounded-xl border border-line bg-paper p-2.5">
+                {inspecting ? (
+                  <p className="flex items-center gap-2 text-[11px] font-medium text-forest">
+                    <Zap className="h-3.5 w-3.5 animate-pulse" /> Inspecting the first PDF locally — pages, encryption and text layer…
+                  </p>
+                ) : inspection ? (
+                  <>
+                    <div className="grid grid-cols-4 gap-1.5">
+                      {[
+                        { label: "Pages", value: inspection.pages ? String(inspection.pages) : "—" },
+                        { label: "Size", value: formatBytes(inspection.size) },
+                        {
+                          label: "Text layer",
+                          value: inspection.needsPassword ? "Locked" : inspection.scanned ? "None" : "Yes",
+                        },
+                        { label: "Encryption", value: inspection.encrypted ? "Protected" : "None" },
+                      ].map((stat) => (
+                        <div key={stat.label} className="rounded-lg bg-bone-deep/50 px-1.5 py-1 text-center">
+                          <p className="truncate font-mono text-[11px] font-semibold leading-tight text-ink">{stat.value}</p>
+                          <p className="mt-0.5 text-[8.5px] font-semibold uppercase tracking-[0.05em] text-ink/60">{stat.label}</p>
+                        </div>
+                      ))}
+                    </div>
+                    {inspection.scanned && !inspection.needsPassword && (
+                      <p className="mt-2 flex items-center gap-1.5 rounded-lg bg-lime/25 px-2 py-1 text-[10.5px] font-semibold text-forest">
+                        <Search className="h-3 w-3" /> Scanned PDF detected — no selectable text.
+                      </p>
+                    )}
+                    {inspection.needsPassword && (
+                      <p className="mt-2 flex items-center gap-1.5 rounded-lg bg-clay/10 px-2 py-1 text-[10.5px] font-semibold text-clay-ink">
+                        <Lock className="h-3 w-3" /> Password required — unlock your own copy first.
+                      </p>
+                    )}
+                    {inspection.error && !inspection.needsPassword && (
+                      <p className="mt-2 text-[10px] leading-snug text-clay-ink">{inspection.error}</p>
+                    )}
+                  </>
+                ) : null}
+              </div>
+            )}
+
             <p className="mt-3 text-[10.5px] font-semibold uppercase tracking-[0.09em] text-ink/75">
-              What would you like to do?
+              {recommendations.length ? "Recommended for this file" : "What would you like to do?"}
             </p>
-            <div className="mt-2 grid grid-cols-2 gap-1.5">
-              {suggestions.map((id) => {
-                const tool = getTool(id);
+            <div className="mt-2 grid grid-cols-1 gap-1.5">
+              {(recommendations.length
+                ? recommendations.map((rec) => ({ id: rec.toolId, reason: rec.reason, tone: rec.tone }))
+                : suggestions.map((id) => ({ id, reason: getTool(id)?.tagline ?? "", tone: "neutral" as const }))
+              ).map((entry) => {
+                const tool = getTool(entry.id);
                 if (!tool) return null;
                 return (
                   <button
-                    key={id}
+                    key={entry.id}
                     type="button"
-                    onClick={() => startTool(id, files)}
-                    className="group flex items-center gap-2 rounded-lg border border-line bg-paper px-2 py-2 text-left transition-colors hover:border-forest/35 hover:bg-lime/10"
+                    onClick={() => startTool(entry.id, files)}
+                    className="group flex items-start gap-2 rounded-lg border border-line bg-paper px-2.5 py-2 text-left transition-colors hover:border-forest/35 hover:bg-lime/10"
                   >
-                    <tool.icon className="h-3.5 w-3.5 shrink-0 text-forest" />
-                    <span className="truncate text-[11.5px] font-medium">{tool.name}</span>
-                    <ChevronRight className="ml-auto h-3 w-3 shrink-0 text-ink/70 group-hover:text-forest" />
+                    <tool.icon className="mt-0.5 h-3.5 w-3.5 shrink-0 text-forest" />
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-[11.5px] font-semibold">{tool.name}</span>
+                      <span className="mt-0.5 block text-[10px] leading-snug text-muted">{entry.reason}</span>
+                    </span>
+                    <ChevronRight className="mt-0.5 h-3 w-3 shrink-0 text-ink/50 group-hover:text-forest" />
                   </button>
                 );
               })}
             </div>
-            <a href="#/tools" className="mt-2 flex items-center justify-center gap-1 py-1 text-[11px] font-medium text-forest hover:underline">
+            <a href="/tools" className="mt-2 flex items-center justify-center gap-1 py-1 text-[11px] font-medium text-forest hover:underline">
               Or choose from all {TOOLS.length} tools <ArrowRight className="h-3 w-3" />
             </a>
           </div>
@@ -135,7 +202,7 @@ function HeroDrop() {
               return (
                 <a
                   key={id}
-                  href={`#/tool/${id}`}
+                  href={toolPath(id)}
                   className="group flex items-center gap-2 rounded-lg border border-line bg-bone/60 px-2 py-2 text-left transition-colors hover:border-forest/30 hover:bg-paper"
                 >
                   <tool.icon className="h-3.5 w-3.5 shrink-0 text-forest" />
@@ -149,7 +216,7 @@ function HeroDrop() {
           <p className="flex items-center gap-1.5 text-[10px] text-muted">
             <ShieldCheck className="h-3 w-3 text-forest" /> No account. No file-size paywall.
           </p>
-          <span className="flex shrink-0 items-center gap-1 rounded-full bg-lime/40 px-2 py-1 text-[9px] font-bold uppercase tracking-[0.07em] text-forest">
+          <span className="flex shrink-0 items-center gap-1 rounded-full bg-lime/40 px-2 py-1 font-mono text-[9px] font-bold uppercase tracking-[0.07em] text-forest">
             <Lock className="h-2.5 w-2.5" /> 0 KB uploaded
           </span>
         </div>
@@ -172,7 +239,7 @@ function HeroDrop() {
  * Home
  * ------------------------------------------------------------------ */
 export default function Home() {
-  const [category, setCategory] = useState<ToolCategory | "all">("all");
+  const [category, setGroup] = useState<ToolGroupId | "all">("all");
   const [query, setQuery] = useState("");
   const { favorites } = useFavorites();
   const activity = useActivity();
@@ -185,22 +252,16 @@ export default function Home() {
   };
 
   const filtered = TOOLS.filter((tool) => {
-    const matchesCategory = category === "all" || tool.category === category;
-    const q = query.trim().toLowerCase();
-    const matchesQuery =
-      !q ||
-      tool.name.toLowerCase().includes(q) ||
-      tool.tagline.toLowerCase().includes(q) ||
-      CATEGORIES[tool.category].name.toLowerCase().includes(q);
-    return matchesCategory && matchesQuery;
+    const matchesGroup = category === "all" || toolGroup(tool.id) === category;
+    return matchesGroup && searchScore(query, tool) > 0;
   });
 
   return (
     <div>
       {/* HERO */}
       <section className="relative overflow-hidden border-b border-line">
-        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(75%_75%_at_85%_0%,#e9f6c6_0%,transparent_60%)]" />
-        <div className="pointer-events-none absolute inset-x-0 top-0 h-full opacity-[0.35] [background-image:linear-gradient(to_right,#dcd6c8_1px,transparent_1px),linear-gradient(to_bottom,#dcd6c8_1px,transparent_1px)] [background-size:72px_72px] [mask-image:radial-gradient(ellipse_at_top,black,transparent_65%)]" />
+        <div className="hero-glow pointer-events-none absolute inset-0" />
+        <div className="hero-grid pointer-events-none absolute inset-x-0 top-0 h-full" />
         <div className="container-page relative grid gap-12 pb-16 pt-12 md:pt-16 lg:grid-cols-[1.15fr_0.85fr] lg:items-center lg:gap-16 lg:pb-20">
           <div className="animate-rise">
             <div className="inline-flex items-center gap-2 rounded-full border border-forest/15 bg-paper/80 py-1.5 pl-1.5 pr-3 text-[11px] font-medium text-forest shadow-soft backdrop-blur">
@@ -220,13 +281,13 @@ export default function Home() {
             </p>
             <div className="mt-7 flex flex-wrap items-center gap-2.5">
               <a
-                href="#/tools"
+                href="/tools"
                 className="inline-flex h-12 items-center gap-2 rounded-xl bg-ink px-6 text-[14.5px] font-medium text-paper shadow-[0_16px_32px_-18px_rgba(18,33,26,0.9)] transition-colors hover:bg-forest-soft"
               >
                 Explore all {TOOLS.length} tools <ArrowRight className="h-4 w-4 text-lime" />
               </a>
               <a
-                href="#/why"
+                href="/why"
                 className="inline-flex h-12 items-center gap-2 rounded-xl border border-ink/15 bg-paper/70 px-5 text-[14px] font-medium transition-colors hover:border-ink/30 hover:bg-paper"
               >
                 Why Paperly? <ArrowUpRight className="h-4 w-4" />
@@ -284,7 +345,7 @@ export default function Home() {
               { value: "∞", label: "Free conversions", sub: "no accounts, ever" },
             ].map((stat, i) => (
               <div key={stat.label} className={cn("px-5 py-4", i > 0 && "border-l border-line max-md:odd:border-l-0", i >= 2 && "max-md:border-t")}>
-                <p className="text-[24px] font-semibold leading-none tracking-[-0.04em] text-forest">{stat.value}</p>
+                <p className="font-mono text-[22px] font-semibold leading-none tracking-[-0.03em] text-forest">{stat.value}</p>
                 <p className="mt-1.5 text-[11.5px] font-medium">{stat.label}</p>
                 <p className="text-[10.5px] text-muted">{stat.sub}</p>
               </div>
@@ -302,12 +363,12 @@ export default function Home() {
             </p>
             <div className="flex flex-wrap gap-1.5">
               {shortcuts.map((tool) => (
-                <a key={tool.id} href={`#/tool/${tool.id}`} className="group flex items-center gap-2 rounded-lg border border-line bg-paper px-2.5 py-1.5 text-[11.5px] font-medium hover:border-forest/30 hover:text-forest">
+                <a key={tool.id} href={toolPath(tool.id)} className="group flex items-center gap-2 rounded-lg border border-line bg-paper px-2.5 py-1.5 text-[11.5px] font-medium hover:border-forest/30 hover:text-forest">
                   <tool.icon className="h-3.5 w-3.5 text-forest" />
                   {tool.name}
                 </a>
               ))}
-              <a href="#/activity" className="flex items-center gap-1 rounded-lg px-2 py-1.5 text-[11.5px] font-medium text-ink/75 hover:text-forest">
+              <a href="/activity" className="flex items-center gap-1 rounded-lg px-2 py-1.5 text-[11.5px] font-medium text-ink/75 hover:text-forest">
                 View activity <ArrowRight className="h-3 w-3" />
               </a>
             </div>
@@ -323,7 +384,7 @@ export default function Home() {
               <Badge tone="lime"><Sparkles className="h-3 w-3" /> New in Paperly</Badge>
               <h2 className="mt-2 text-[21px] font-semibold leading-tight tracking-[-0.03em]">A quieter, sharper PDF platform.</h2>
               <p className="mt-1 text-[11.5px] leading-relaxed text-muted">Expanded from 42 to {TOOLS.length} tools — plus full offline support, pattern-based redaction, PDF inspection, bookmark editing and table extraction. Still nothing uploaded.</p>
-              <a href="#/tools?new=1" className="mt-2 inline-flex items-center gap-1 text-[11.5px] font-semibold text-forest hover:underline">
+              <a href="/tools?new=1" className="mt-2 inline-flex items-center gap-1 text-[11.5px] font-semibold text-forest hover:underline">
                 See all {TOOLS.filter((tool) => tool.new).length} new tools <ArrowRight className="h-3 w-3" />
               </a>
             </div>
@@ -342,7 +403,7 @@ export default function Home() {
                 const tool = getTool(item.id);
                 if (!tool) return null;
                 return (
-                  <a key={item.id} href={`#/tool/${item.id}`} className="group flex flex-col rounded-xl border border-line bg-paper p-3 transition-all hover:-translate-y-0.5 hover:border-forest/30 hover:shadow-soft">
+                  <a key={item.id} href={toolPath(item.id)} className="group flex flex-col rounded-xl border border-line bg-paper p-3 transition-all hover:-translate-y-0.5 hover:border-forest/30 hover:shadow-soft">
                     <div className="flex items-center justify-between">
                       <tool.icon className="h-4 w-4 text-forest" />
                       <span className="rounded-full bg-lime/50 px-1.5 py-0.5 text-[8px] font-bold uppercase tracking-[0.07em] text-forest">New</span>
@@ -373,7 +434,7 @@ export default function Home() {
                 straight back.
               </p>
             </div>
-            <a href="#/tools" className="inline-flex shrink-0 items-center gap-1.5 text-[13px] font-semibold text-forest hover:underline">
+            <a href="/tools" className="inline-flex shrink-0 items-center gap-1.5 text-[13px] font-semibold text-forest hover:underline">
               View the full catalog <ArrowRight className="h-4 w-4" />
             </a>
           </div>
@@ -382,27 +443,27 @@ export default function Home() {
             <div className="flex flex-wrap gap-1.5">
               <button
                 type="button"
-                onClick={() => setCategory("all")}
+                onClick={() => setGroup("all")}
                 className={cn(
                   "rounded-full border px-3.5 py-1.5 text-[12px] font-medium transition-colors",
                   category === "all" ? "border-forest bg-forest text-paper" : "border-line bg-paper text-ink/70 hover:border-forest/30",
                 )}
               >
-                All tools <span className="ml-1 text-paper/75">{TOOLS.length}</span>
+                All {TOOLS.length} <span className="ml-1 text-paper/75">tools</span>
               </button>
-              {(Object.keys(CATEGORIES) as ToolCategory[]).map((key) => (
+              {TOOL_GROUPS.map((group) => (
                 <button
-                  key={key}
+                  key={group.id}
                   type="button"
-                  onClick={() => setCategory(key)}
+                  onClick={() => setGroup(group.id)}
                   className={cn(
                     "flex items-center gap-1.5 rounded-full border px-3.5 py-1.5 text-[12px] font-medium transition-colors",
-                    category === key ? "border-forest bg-forest text-paper" : "border-line bg-paper text-ink/70 hover:border-forest/30",
+                    category === group.id ? "border-forest bg-forest text-paper" : "border-line bg-paper text-ink/70 hover:border-forest/30",
                   )}
                 >
-                  <span className={cn("h-1.5 w-1.5 rounded-full", category === key ? "bg-lime" : CATEGORIES[key].dot)} />
-                  {CATEGORIES[key].name}
-                  <span className="text-ink/75">{TOOLS.filter((t) => t.category === key).length}</span>
+                  <span className={cn("h-1.5 w-1.5 rounded-full", category === group.id ? "bg-lime" : group.dot)} />
+                  {group.label}
+                  <span className={cn("tabular-nums", category === group.id ? "text-paper/75" : "text-ink/75")}>{group.ids.length}</span>
                 </button>
               ))}
             </div>
@@ -427,7 +488,7 @@ export default function Home() {
           ) : (
             <div className="mt-6 rounded-2xl border border-dashed border-line bg-paper p-10 text-center">
               <p className="text-[14px] font-medium">No tools match “{query}”.</p>
-              <button type="button" onClick={() => { setQuery(""); setCategory("all"); }} className="mt-2 text-[12px] font-semibold text-forest hover:underline">
+              <button type="button" onClick={() => { setQuery(""); setGroup("all"); }} className="mt-2 text-[12px] font-semibold text-forest hover:underline">
                 Clear search and filters
               </button>
             </div>
@@ -450,7 +511,7 @@ export default function Home() {
                 Most “free” PDF sites upload your document first. Paperly flips that: the tools download to your browser, and your files stay
                 where they belong.
               </p>
-              <a href="#/privacy" className="mt-5 inline-flex items-center gap-1.5 text-[13px] font-semibold text-forest hover:underline">
+              <a href="/privacy" className="mt-5 inline-flex items-center gap-1.5 text-[13px] font-semibold text-forest hover:underline">
                 Read the privacy promise <ArrowRight className="h-4 w-4" />
               </a>
             </div>
@@ -626,10 +687,10 @@ export default function Home() {
                   including the places where they are stronger.
                 </p>
                 <div className="mt-4 flex flex-wrap gap-2">
-                  <a href="#/vs-ilovepdf" className="inline-flex h-10 items-center gap-1.5 rounded-lg bg-ink px-4 text-[12.5px] font-semibold text-paper hover:bg-forest-soft">
+                  <a href="/vs-ilovepdf" className="inline-flex h-10 items-center gap-1.5 rounded-lg bg-ink px-4 text-[12.5px] font-semibold text-paper hover:bg-forest-soft">
                     Read the comparison <ArrowRight className="h-3.5 w-3.5 text-lime" />
                   </a>
-                  <a href="#/tools" className="inline-flex h-10 items-center gap-1.5 rounded-lg border border-line px-4 text-[12.5px] font-medium hover:border-forest/30 hover:text-forest">
+                  <a href="/tools" className="inline-flex h-10 items-center gap-1.5 rounded-lg border border-line px-4 text-[12.5px] font-medium hover:border-forest/30 hover:text-forest">
                     Open the toolbox
                   </a>
                 </div>
@@ -669,13 +730,13 @@ export default function Home() {
               </h2>
               <p className="mt-2 max-w-[54ch] text-[13px] leading-relaxed text-muted">Short, practical walkthroughs — including the limitations no one else prints.</p>
             </div>
-            <a href="#/guides" className="inline-flex shrink-0 items-center gap-1.5 text-[12.5px] font-semibold text-forest hover:underline">
+            <a href="/guides" className="inline-flex shrink-0 items-center gap-1.5 text-[12.5px] font-semibold text-forest hover:underline">
               All guides <ArrowRight className="h-3.5 w-3.5" />
             </a>
           </div>
           <div className="mt-6 grid gap-3 sm:grid-cols-3">
             {GUIDE_TEASERS.map((guide) => (
-              <a key={guide.slug} href={`#/guides?g=${guide.slug}`} className="group rounded-xl border border-line bg-paper p-4 transition-colors hover:border-forest/30">
+              <a key={guide.slug} href={`/guides?g=${guide.slug}`} className="group rounded-xl border border-line bg-paper p-4 transition-colors hover:border-forest/30">
                 <div className="flex items-center justify-between text-[10px] font-semibold uppercase tracking-[0.08em] text-forest/90">
                   {guide.category} <span className="text-ink/70">{guide.minutes} min</span>
                 </div>
@@ -698,7 +759,7 @@ export default function Home() {
             <p className="mt-3 max-w-[38ch] text-[13.5px] leading-relaxed text-muted">
               Including the bits other PDF sites leave out. If something isn’t clear, the Help page goes deeper.
             </p>
-            <a href="#/help" className="mt-4 inline-flex items-center gap-1.5 text-[13px] font-semibold text-forest hover:underline">
+            <a href="/help" className="mt-4 inline-flex items-center gap-1.5 text-[13px] font-semibold text-forest hover:underline">
               Visit Help & FAQ <ArrowRight className="h-4 w-4" />
             </a>
           </div>
@@ -762,10 +823,10 @@ export default function Home() {
                 Pick a tool and your first job can be done in under a minute. No account, no email, no trial countdown.
               </p>
               <div className="mt-6 flex flex-wrap gap-2.5">
-                <a href="#/tool/merge" className="inline-flex h-11 items-center gap-2 rounded-xl bg-lime px-5 text-[13.5px] font-semibold text-ink transition-colors hover:bg-[#e4f88f]">
+                <a href="/merge-pdf" className="inline-flex h-11 items-center gap-2 rounded-xl bg-lime px-5 text-[13.5px] font-semibold text-ink transition-colors hover:bg-[#e4f88f]">
                   Merge a PDF <ArrowRight className="h-4 w-4" />
                 </a>
-                <a href="#/tools" className="inline-flex h-11 items-center gap-2 rounded-xl border border-paper/20 px-5 text-[13.5px] font-medium text-paper transition-colors hover:bg-paper/10">
+                <a href="/tools" className="inline-flex h-11 items-center gap-2 rounded-xl border border-paper/20 px-5 text-[13.5px] font-medium text-paper transition-colors hover:bg-paper/10">
                   Browse all tools
                 </a>
               </div>

@@ -1,12 +1,14 @@
 import { ArrowRight, Check, Cpu, Search, ShieldCheck, Sparkles, Zap } from "lucide-react";
 import { useEffect, useState } from "react";
-import { CATEGORIES, TOOLS, type ToolCategory } from "@/lib/toolRegistry";
+import { TOOLS } from "@/lib/toolRegistry";
+import { TOOL_GROUPS, searchScore, toolGroup, type ToolGroupId } from "@/lib/groups";
 import { Badge, Button } from "@/components/ui";
 import { ToolCard } from "@/components/ToolCard";
 import { cn } from "@/utils/cn";
+import { toolPath } from "@/lib/slugs";
 
-export default function Tools({ initialCategory = "all", initialNew = false }: { initialCategory?: ToolCategory | "all"; initialNew?: boolean }) {
-  const [category, setCategory] = useState<ToolCategory | "all">(initialCategory);
+export default function Tools({ initialCategory = "all", initialNew = false }: { initialCategory?: ToolGroupId | "all"; initialNew?: boolean }) {
+  const [category, setCategory] = useState<ToolGroupId | "all">(initialCategory);
   const [query, setQuery] = useState("");
   const [showNew, setShowNew] = useState(initialNew);
 
@@ -16,17 +18,17 @@ export default function Tools({ initialCategory = "all", initialNew = false }: {
   const q = query.trim().toLowerCase();
   const filtered = TOOLS.filter(
     (tool) =>
-      (category === "all" || tool.category === category) &&
+      (category === "all" || toolGroup(tool.id) === category) &&
       (!showNew || tool.new) &&
-      (!q || tool.name.toLowerCase().includes(q) || tool.tagline.toLowerCase().includes(q) || CATEGORIES[tool.category].name.toLowerCase().includes(q)),
+      (!q || searchScore(q, tool) > 0),
   );
 
-  const activeCategories = (Object.keys(CATEGORIES) as ToolCategory[]).filter((key) => category === "all" || category === key);
+  const activeGroups = TOOL_GROUPS.filter((group) => category === "all" || category === group.id);
 
   return (
     <div>
       <section className="relative overflow-hidden border-b border-line">
-        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(70%_90%_at_90%_0%,#eef8d3_0%,transparent_65%)]" />
+        <div className="hero-glow pointer-events-none absolute inset-0" />
         <div className="container-page relative pb-10 pt-12 md:pb-12 md:pt-16">
           <Badge tone="forest">
             <Sparkles className="h-3 w-3" /> {TOOLS.length} tools · all local
@@ -53,14 +55,14 @@ export default function Tools({ initialCategory = "all", initialNew = false }: {
           <div className="flex gap-1 overflow-x-auto pb-1 scrollbar-thin sm:pb-0">
             <FilterPill active={category === "all" && !showNew} onClick={() => { setCategory("all"); setShowNew(false); }} label="All" count={TOOLS.length} />
             <FilterPill active={showNew} onClick={() => { setShowNew(!showNew); setCategory("all"); }} label="New" count={TOOLS.filter((t) => t.new).length} dot="bg-clay" />
-            {(Object.keys(CATEGORIES) as ToolCategory[]).map((key) => (
+            {TOOL_GROUPS.map((group) => (
               <FilterPill
-                key={key}
-                active={category === key}
-                onClick={() => setCategory(key)}
-                label={CATEGORIES[key].name}
-                count={TOOLS.filter((t) => t.category === key).length}
-                dot={CATEGORIES[key].dot}
+                key={group.id}
+                active={category === group.id}
+                onClick={() => setCategory(group.id)}
+                label={group.label}
+                count={group.ids.length}
+                dot={group.dot}
               />
             ))}
           </div>
@@ -90,19 +92,19 @@ export default function Tools({ initialCategory = "all", initialNew = false }: {
               </button>
             </div>
           )}
-          {activeCategories.map((key) => {
-            const tools = filtered.filter((t) => t.category === key);
+          {activeGroups.map((group) => {
+            const tools = filtered.filter((t) => toolGroup(t.id) === group.id);
             if (!tools.length) return null;
             return (
-              <div key={key} id={key}>
+              <div key={group.id} id={group.id}>
                 <div className="mb-4 flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
                   <div>
                     <div className="flex items-center gap-2">
-                      <span className={cn("h-2 w-2 rounded-full", CATEGORIES[key].dot)} />
-                      <h2 className="text-[22px] font-semibold tracking-[-0.025em]">{CATEGORIES[key].name}</h2>
+                      <span className={cn("h-2 w-2 rounded-full", group.dot)} />
+                      <h2 className="text-[22px] font-semibold tracking-[-0.025em]">{group.label}</h2>
                       <span className="rounded-full bg-ink/5 px-2 py-0.5 text-[10.5px] font-semibold tabular-nums text-ink/75">{tools.length}</span>
                     </div>
-                    <p className="mt-1 text-[12.5px] text-muted">{CATEGORIES[key].blurb}</p>
+                    <p className="mt-1 text-[12.5px] text-muted">{group.blurb}</p>
                   </div>
                   <span className="text-[11px] font-medium text-ink/75">All processing stays in your browser</span>
                 </div>
@@ -152,7 +154,7 @@ export default function Tools({ initialCategory = "all", initialNew = false }: {
               {["merge", "compress", "edit"].map((id) => {
                 const tool = TOOLS.find((t) => t.id === id)!;
                 return (
-                  <a key={id} href={`#/tool/${id}`} className="inline-flex h-10 items-center gap-1.5 rounded-lg bg-lime px-3.5 text-[12.5px] font-semibold text-ink hover:bg-[#e4f88f]">
+                  <a key={id} href={toolPath(id)} className="inline-flex h-10 items-center gap-1.5 rounded-lg bg-lime px-3.5 text-[12.5px] font-semibold text-ink hover:bg-[#e4f88f]">
                     {tool.name} <ArrowRight className="h-3.5 w-3.5" />
                   </a>
                 );

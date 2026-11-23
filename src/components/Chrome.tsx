@@ -5,10 +5,12 @@ import { CATEGORIES, POPULAR_IDS, TOOLS, getTool, type ToolCategory } from "@/li
 import { CommandPalette, useCommandPalette } from "@/components/CommandPalette";
 import { navigate, useRoute } from "@/lib/router";
 import { ToolTile } from "@/components/ui";
+import { toolPath } from "@/lib/slugs";
+import { EngineStatus, ThemeToggle } from "@/components/SystemStatus";
 
 export function Logo({ light = false, compact = false }: { light?: boolean; compact?: boolean }) {
   return (
-    <a href="#/" className="group flex items-center gap-2.5" aria-label="Paperly home">
+    <a href="/" className="group flex items-center gap-2.5" aria-label="Paperly home">
       <span
         className={cn(
           "relative flex h-9 w-9 items-center justify-center overflow-hidden rounded-[11px] transition-transform duration-200 group-hover:-rotate-3",
@@ -33,11 +35,11 @@ export function Logo({ light = false, compact = false }: { light?: boolean; comp
 }
 
 const NAV = [
-  { label: "Why Paperly", href: "#/why" },
-  { label: "Compare", href: "#/vs-ilovepdf" },
-  { label: "Guides", href: "#/guides" },
-  { label: "Pricing", href: "#/pricing" },
-  { label: "Help", href: "#/help" },
+  { label: "Why Paperly", href: "/why" },
+  { label: "Compare", href: "/vs-ilovepdf" },
+  { label: "Guides", href: "/guides" },
+  { label: "Pricing", href: "/pricing" },
+  { label: "Help", href: "/help" },
 ];
 
 export function Header() {
@@ -78,9 +80,9 @@ export function Header() {
             <Lock className="h-3 w-3 text-lime" />
             Your documents are never uploaded. Files stay on this device.
           </p>
-          <div className="hidden items-center gap-4 sm:flex">
-            <span className="text-paper/75">No document uploads · No sign-up · No limits</span>
-            <a href="#/why" className="flex items-center gap-1 text-lime transition-opacity hover:opacity-80">
+          <div className="hidden items-center gap-3 sm:flex">
+            <EngineStatus className="border-lime/25 bg-lime/10 text-lime" />
+            <a href="/why" className="flex items-center gap-1 text-lime transition-opacity hover:opacity-80">
               Why this matters <ArrowRight className="h-3 w-3" />
             </a>
           </div>
@@ -110,7 +112,7 @@ export function Header() {
                 href={item.href}
                 className={cn(
                   "flex h-9 items-center rounded-lg px-3 text-[13.5px] font-medium transition-colors",
-                  route === item.href.replace("#", "")
+                  route === item.href
                     ? "bg-ink/[0.06] text-ink"
                     : "text-ink/75 hover:bg-ink/[0.04] hover:text-ink",
                 )}
@@ -121,18 +123,21 @@ export function Header() {
           </nav>
 
           <div className="flex items-center gap-2">
+            <EngineStatus className="md:hidden" />
+            <ThemeToggle />
             <button
               type="button"
               onClick={() => setPaletteOpen(true)}
-              aria-label="Open search"
+              title="Search tools"
+              aria-keyshortcuts="Meta+K Control+K"
               className="flex h-10 items-center gap-2 rounded-xl border border-line bg-paper px-2.5 text-ink/75 transition-colors hover:border-forest/30 hover:text-forest sm:px-3"
             >
               <Search className="h-4 w-4" />
               <span className="hidden text-[12.5px] lg:inline">Search</span>
-              <kbd className="hidden rounded border border-line bg-bone-deep/60 px-1.5 py-0.5 font-mono text-[9.5px] text-ink/75 lg:inline">⌘K</kbd>
+              <kbd aria-hidden="true" className="hidden rounded border border-line bg-bone-deep/60 px-1.5 py-0.5 font-mono text-[9.5px] text-ink/75 lg:inline">⌘K</kbd>
             </button>
             <a
-              href="#/tools"
+              href="/tools"
               className="hidden h-10 items-center gap-2 rounded-xl bg-ink px-4 text-[13px] font-medium text-paper transition-colors hover:bg-forest-soft sm:inline-flex"
             >
               <LayoutGrid className="h-3.5 w-3.5 text-lime" />
@@ -166,7 +171,7 @@ function ToolsMegaMenu() {
         {(Object.keys(CATEGORIES) as ToolCategory[]).map((key) => (
           <div key={key}>
             <a
-              href={`#/tools?c=${key}`}
+              href={`/tools?c=${key}`}
               className="mb-1 flex items-center gap-1.5 px-2 py-1 text-[10.5px] font-bold uppercase tracking-[0.11em] text-ink/75 hover:text-forest"
             >
               <span className={cn("h-1.5 w-1.5 rounded-full", CATEGORIES[key].dot)} />
@@ -176,7 +181,7 @@ function ToolsMegaMenu() {
               {TOOLS.filter((t) => t.category === key).map((tool) => (
                 <li key={tool.id}>
                   <a
-                    href={`#/tool/${tool.id}`}
+                    href={toolPath(tool.id)}
                     className="flex items-center gap-2 rounded-lg px-2 py-1.5 text-[12.5px] font-medium text-ink/75 transition-colors hover:bg-bone-deep/60 hover:text-forest"
                   >
                     <tool.icon className="h-3.5 w-3.5 text-ink/75" />
@@ -189,7 +194,7 @@ function ToolsMegaMenu() {
         ))}
       </div>
       <a
-        href="#/tools"
+        href="/tools"
         className="flex items-center justify-between border-t border-line bg-bone-deep/40 px-5 py-3 text-[12.5px] font-semibold text-forest transition-colors hover:bg-lime/25"
       >
         See the whole toolbox
@@ -211,7 +216,7 @@ function MobileMenu() {
           return (
             <a
               key={id}
-              href={`#/tool/${id}`}
+              href={toolPath(id)}
               className="flex items-center gap-2.5 rounded-xl border border-line px-2.5 py-2.5"
             >
               <ToolTile tool={tool} size="sm" />
@@ -221,12 +226,12 @@ function MobileMenu() {
         })}
       </div>
       <div className="mt-4 grid gap-2">
-        {[...NAV, { label: "Guides", href: "#/guides" }, { label: "Activity", href: "#/activity" }, { label: "About", href: "#/about" }, { label: "Contact", href: "#/contact" }].filter((item, index, list) => list.findIndex((x) => x.href === item.href) === index).map((item) => (
+        {[...NAV, { label: "Guides", href: "/guides" }, { label: "Activity", href: "/activity" }, { label: "About", href: "/about" }, { label: "Contact", href: "/contact" }].filter((item, index, list) => list.findIndex((x) => x.href === item.href) === index).map((item) => (
           <a key={item.href} href={item.href} className="rounded-lg px-1 py-2 text-[14px] font-medium text-ink/75">
             {item.label}
           </a>
         ))}
-        <a href="#/tools" className="mt-1 flex h-11 items-center justify-center gap-2 rounded-xl bg-ink text-[13.5px] font-semibold text-paper">
+        <a href="/tools" className="mt-1 flex h-11 items-center justify-center gap-2 rounded-xl bg-ink text-[13.5px] font-semibold text-paper">
           <LayoutGrid className="h-4 w-4 text-lime" /> All {TOOLS.length} tools <ArrowRight className="h-4 w-4" />
         </a>
       </div>
@@ -254,30 +259,30 @@ export function Footer() {
             title="Popular tools"
             links={["merge", "split", "compress", "edit", "sign", "protect"].map((id) => {
               const t = getTool(id)!;
-              return { label: t.name, href: `#/tool/${id}` };
+              return { label: t.name, href: toolPath(id) };
             })}
           />
           <FooterColumn
             title="Convert & edit"
             links={["ocr", "markdown-to-pdf", "pdf-to-word", "word-to-pdf", "pdf-to-excel", "excel-to-pdf"].map((id) => {
               const t = getTool(id)!;
-              return { label: t.name, href: `#/tool/${id}` };
+              return { label: t.name, href: toolPath(id) };
             })}
           />
           <div>
             <p className="mb-3.5 text-[11px] font-semibold uppercase tracking-[0.12em] text-paper/70">Company</p>
             <ul className="space-y-2.5">
               {[
-                { label: "Why Paperly", href: "#/why" },
-                { label: "Compare with iLovePDF", href: "#/vs-ilovepdf" },
-                { label: "Guides", href: "#/guides" },
-                { label: "About", href: "#/about" },
-                { label: "Activity", href: "#/activity" },
-                { label: "Help & FAQ", href: "#/help" },
-                { label: "Sitemap", href: "#/sitemap" },
-                { label: "Contact", href: "#/contact" },
-                { label: "Privacy", href: "#/privacy" },
-                { label: "Terms", href: "#/terms" },
+                { label: "Why Paperly", href: "/why" },
+                { label: "Compare with iLovePDF", href: "/vs-ilovepdf" },
+                { label: "Guides", href: "/guides" },
+                { label: "About", href: "/about" },
+                { label: "Activity", href: "/activity" },
+                { label: "Help & FAQ", href: "/help" },
+                { label: "Sitemap", href: "/sitemap" },
+                { label: "Contact", href: "/contact" },
+                { label: "Privacy", href: "/privacy" },
+                { label: "Terms", href: "/terms" },
               ].map((link) => (
                 <li key={link.label}>
                   <a href={link.href} className="text-[12.5px] text-paper/75 transition-colors hover:text-lime">
@@ -294,12 +299,12 @@ export function Footer() {
             © {year} Paperly. Made for the open web. Files stay yours.
           </p>
           <div className="flex flex-wrap items-center gap-x-5 gap-y-2 text-[11.5px] text-paper/75">
-            <a href="#/vs-ilovepdf" className="hover:text-paper/70">Compare</a>
-            <a href="#/guides" className="hover:text-paper/70">Guides</a>
-            <a href="#/activity" className="hover:text-paper/70">Activity</a>
-            <a href="#/privacy" className="hover:text-paper/70">Privacy</a>
-            <a href="#/terms" className="hover:text-paper/70">Terms</a>
-            <a href="#/tools" className="flex items-center gap-1 hover:text-lime">
+            <a href="/vs-ilovepdf" className="hover:text-paper/70">Compare</a>
+            <a href="/guides" className="hover:text-paper/70">Guides</a>
+            <a href="/activity" className="hover:text-paper/70">Activity</a>
+            <a href="/privacy" className="hover:text-paper/70">Privacy</a>
+            <a href="/terms" className="hover:text-paper/70">Terms</a>
+            <a href="/tools" className="flex items-center gap-1 hover:text-lime">
               All tools <ArrowUpRight className="h-3 w-3" />
             </a>
             <span className="flex items-center gap-1.5">

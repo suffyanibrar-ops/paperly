@@ -1,6 +1,6 @@
 import { test, expect } from "@playwright/test";
 
-const ROUTES = ["/", "/tools", "/tool/merge", "/tool/edit", "/tool/batch", "/tool/create-form", "/tool/summarize", "/vs-ilovepdf", "/privacy"];
+const ROUTES = ["/", "/tools", "/merge-pdf", "/edit-pdf", "/batch-pdf", "/create-form-pdf", "/summarize-pdf", "/vs-ilovepdf", "/privacy"];
 
 test.describe("mobile usability", () => {
   test("no horizontal overflow and headings render on a phone viewport", async ({ page }) => {

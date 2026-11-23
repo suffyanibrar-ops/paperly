@@ -1,22 +1,25 @@
 import { ArrowRight, Clock3, Command, CornerDownLeft, Search, Star, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { CATEGORIES, POPULAR_IDS, TOOLS, getTool, type Tool } from "@/lib/toolRegistry";
+import { POPULAR_IDS, TOOLS, getTool, type Tool } from "@/lib/toolRegistry";
+import { groupLabel, searchScore } from "@/lib/groups";
+import { toolPath } from "@/lib/slugs";
+import { navigate } from "@/lib/router";
 import { readableRecent, useActivity, useFavorites, type ActivityEntry } from "@/lib/activity";
 import { ToolTile } from "@/components/ui";
 import { cn } from "@/utils/cn";
 
 const PAGES = [
-  { label: "All tools", href: "#/tools", keywords: "catalog index apps" },
-  { label: "Why Paperly", href: "#/why", keywords: "about privacy local" },
-  { label: "Pricing", href: "#/pricing", keywords: "free plan cost" },
-  { label: "Privacy promise", href: "#/privacy", keywords: "security data" },
-  { label: "Help & FAQ", href: "#/help", keywords: "support questions" },
-  { label: "Guides", href: "#/guides", keywords: "tutorials walkthrough how to" },
-  { label: "Activity", href: "#/activity", keywords: "history recent downloads" },
-  { label: "About", href: "#/about", keywords: "company mission" },
-  { label: "Contact", href: "#/contact", keywords: "email support feedback" },
-  { label: "Sitemap", href: "#/sitemap", keywords: "all pages" },
-  { label: "Terms", href: "#/terms", keywords: "legal" },
+  { label: "All tools", href: "/tools", keywords: "catalog index apps" },
+  { label: "Why Paperly", href: "/why", keywords: "about privacy local" },
+  { label: "Pricing", href: "/pricing", keywords: "free plan cost" },
+  { label: "Privacy promise", href: "/privacy", keywords: "security data" },
+  { label: "Help & FAQ", href: "/help", keywords: "support questions" },
+  { label: "Guides", href: "/guides", keywords: "tutorials walkthrough how to" },
+  { label: "Activity", href: "/activity", keywords: "history recent downloads" },
+  { label: "About", href: "/about", keywords: "company mission" },
+  { label: "Contact", href: "/contact", keywords: "email support feedback" },
+  { label: "Sitemap", href: "/sitemap", keywords: "all pages" },
+  { label: "Terms", href: "/terms", keywords: "legal" },
 ];
 
 type Entry =
@@ -33,12 +36,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
 
   const entries = useMemo<Entry[]>(() => {
     const q = query.trim().toLowerCase();
-    const matchTool = (tool: Tool) =>
-      !q ||
-      tool.name.toLowerCase().includes(q) ||
-      tool.tagline.toLowerCase().includes(q) ||
-      tool.id.includes(q) ||
-      CATEGORIES[tool.category].name.toLowerCase().includes(q);
+    const matchTool = (tool: Tool) => !q || searchScore(q, tool) > 0;
 
     const groups: Entry[] = [];
     if (!q) {
@@ -51,7 +49,9 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
         .filter((t): t is Tool => Boolean(t))
         .forEach((tool) => groups.push({ kind: "tool", tool, group: "Popular" }));
     } else {
-      TOOLS.filter(matchTool).forEach((tool) => groups.push({ kind: "tool", tool, group: "Tools" }));
+      TOOLS.filter(matchTool)
+      .sort((a, b) => searchScore(q, b) - searchScore(q, a))
+      .forEach((tool) => groups.push({ kind: "tool", tool, group: "Tools" }));
     }
     const pages = PAGES.filter(
       (page) => !q || page.label.toLowerCase().includes(q) || page.keywords.includes(q),
@@ -96,8 +96,8 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
         const entry = entries[active];
         if (!entry) return;
         event.preventDefault();
-        if (entry.kind === "tool") window.location.hash = `/tool/${entry.tool.id}`;
-        else window.location.hash = entry.href.replace(/^#/, "");
+        if (entry.kind === "tool") navigate(toolPath(entry.tool.id));
+        else navigate(entry.href);
         onClose();
       }
     };
@@ -146,7 +146,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
             const showGroup = entry.group !== lastGroup;
             lastGroup = entry.group;
             const isActive = index === active;
-            const href = entry.kind === "tool" ? `#/tool/${entry.tool.id}` : entry.href;
+            const href = entry.kind === "tool" ? toolPath(entry.tool.id) : entry.href;
             return (
               <div key={`${entry.kind}-${href}`}>
                 {showGroup && (
@@ -174,7 +174,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
                         <span className={cn("block truncate text-[10.5px]", isActive ? "text-paper/75" : "text-muted")}>{entry.tool.tagline}</span>
                       </span>
                       <span className={cn("hidden text-[9.5px] font-semibold uppercase tracking-[0.06em] sm:block", isActive ? "text-lime" : "text-ink/70")}>
-                        {CATEGORIES[entry.tool.category].name}
+                        {groupLabel(entry.tool.id)}
                       </span>
                     </>
                   ) : (

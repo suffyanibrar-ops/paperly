@@ -10,6 +10,7 @@ import {
   FileText,
   Info,
   Keyboard,
+  Layers,
   Loader2,
   ShieldCheck,
   Sparkles,
@@ -34,11 +35,13 @@ import {
 } from "react";
 import { cn } from "@/utils/cn";
 import { CATEGORIES, getTool, type Tool } from "@/lib/toolRegistry";
+import { groupLabel, toolGroup } from "@/lib/groups";
 import { useFavorites } from "@/lib/activity";
 import { isTypingTarget } from "@/lib/hotkeys";
 import { fileExt, formatBytes } from "@/lib/format";
 import { friendlyProcessingError, validateUpload } from "@/lib/security";
 import type { SampleSpec } from "@/lib/sample";
+import { toolPath } from "@/lib/slugs";
 
 /* One global paste listener: the most recently mounted drop zone wins, so a
  * page with several zones never adds the same pasted file twice. */
@@ -333,7 +336,7 @@ export function FileRow({
       </div>
       <div className="min-w-0 flex-1">
         <p className="truncate text-[13px] font-semibold leading-tight">{file.name}</p>
-        <p className="mt-0.5 text-[11px] text-muted">
+        <p className="mt-0.5 font-mono text-[11px] text-muted">
           {fileTypeLabel(file.name)} · {size ?? formatBytes(file.size)}
         </p>
       </div>
@@ -685,6 +688,7 @@ export function ToolShell({
   aside?: ReactNode;
 }) {
   const cat = CATEGORIES[tool.category];
+  const batchable = ["compress", "watermark", "ocr", "sanitize"].includes(tool.id);
   const { isFavorite, toggle } = useFavorites();
   const favorite = isFavorite(tool.id);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
@@ -709,16 +713,27 @@ export function ToolShell({
     <div className="pb-20 pt-7">
       <div className="container-page">
         <nav aria-label="Breadcrumb" className="mb-6 flex items-center gap-1.5 text-[12px] text-muted">
-          <a href="#/tools" className="transition-colors hover:text-forest">
+          <a href="/tools" className="transition-colors hover:text-forest">
             All tools
           </a>
           <span className="text-ink/70">/</span>
-          <a href={`#/tools?c=${tool.category}`} className="transition-colors hover:text-forest">
-            {cat.name}
+          <a href={`/tools?c=${toolGroup(tool.id)}`} className="transition-colors hover:text-forest">
+            {groupLabel(tool.id)}
           </a>
           <span className="text-ink/70">/</span>
           <span className="font-medium text-ink/70">{tool.name}</span>
         </nav>
+
+        {batchable && (
+          <a
+            href="/batch-pdf"
+            className="mb-5 flex flex-wrap items-center gap-2 rounded-xl border border-forest/15 bg-lime/20 px-3.5 py-2.5 text-[11.5px] font-medium text-forest transition-colors hover:border-forest/35"
+          >
+            <Layers className="h-3.5 w-3.5" />
+            Need this across many files? Batch PDF runs compress, watermark, OCR and sanitize on multiple PDFs and returns one ZIP.
+            <span className="ml-auto inline-flex items-center gap-1 font-semibold">Open batch <ArrowRight className="h-3 w-3" /></span>
+          </a>
+        )}
 
         <div className="mb-7 flex flex-col gap-5 border-b border-line pb-7 md:flex-row md:items-end md:justify-between">
           <div className="flex items-start gap-4">
@@ -788,7 +803,7 @@ export function ToolShell({
                 <p className="mt-1 text-[12px] leading-relaxed text-paper/75">
                   Paperly processes everything in this tab. There’s no upload, no server copy and no file retention to worry about.
                 </p>
-                <a href="#/privacy" className="mt-3 inline-flex items-center gap-1 text-[12px] font-semibold text-lime hover:underline">
+                <a href="/privacy" className="mt-3 inline-flex items-center gap-1 text-[12px] font-semibold text-lime hover:underline">
                   How it works <ArrowRight className="h-3.5 w-3.5" />
                 </a>
               </div>
@@ -811,7 +826,7 @@ export function ToolShell({
                     .map((related) => (
                       <a
                         key={related.id}
-                        href={`#/tool/${related.id}`}
+                        href={toolPath(related.id)}
                         className="group flex items-center gap-2.5 rounded-xl border border-transparent px-2 py-2 transition-colors hover:border-line hover:bg-paper"
                       >
                         <ToolTile tool={related} size="sm" />

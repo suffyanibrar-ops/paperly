@@ -4,4 +4,4 @@ Allow: /
 Disallow: /activity
 
 # No user documents are stored on any server, so there is nothing private to crawl.
-Sitemap: https://paperlypdf.netlify.app/sitemap.xml
+Sitemap: https://paperlypdf.com/sitemap.xml

@@ -768,7 +768,7 @@ export function UnlockTool() {
           {probe.status === "unreadable" && (
             <Alert tone="error" title="This file won’t open">
               It doesn’t look like a readable PDF, so there is nothing to decrypt.{" "}
-              <a href="#/tool/repair" className="font-semibold underline">
+              <a href="/repair" className="font-semibold underline">
                 Open Repair PDF
               </a>{" "}
               to try a structural rebuild.

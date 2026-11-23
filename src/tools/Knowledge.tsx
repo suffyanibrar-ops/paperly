@@ -962,7 +962,7 @@ export function AskPdfTool() {
       {indexed && indexed.emptyTextDocs.length > 0 && (
         <Alert tone="warning" title="Some PDFs have no text layer">
           {indexed.emptyTextDocs.join(", ")} {indexed.emptyTextDocs.length === 1 ? "has" : "have"} almost no extractable text. Run{" "}
-          <a href="#/tool/ocr" className="font-semibold underline">
+          <a href="/ocr-pdf" className="font-semibold underline">
             OCR PDF
           </a>{" "}
           first, then add the searchable copy here.
@@ -1636,61 +1636,61 @@ function buildRepairSuggestions(flags: readonly RedFlag[]): RepairSuggestion[] {
       id: "unlock",
       label: "Unlock the file first",
       detail: "Most tools need the password removed before they can read the structure reliably.",
-      href: "#/tool/unlock",
+      href: "/unlock-pdf",
     },
     parse: {
       id: "repair",
       label: "Rebuild the damaged structure",
       detail: "Repair PDF re-writes the cross-reference table and object graph without re-encoding the pages.",
-      href: "#/tool/repair",
+      href: "/repair-pdf",
     },
     xref: {
       id: "repair-xref",
       label: "Re-save with Repair PDF",
       detail: "A repaired cross-reference table makes the file open reliably in stricter viewers.",
-      href: "#/tool/repair",
+      href: "/repair-pdf",
     },
     javascript: {
       id: "sanitize-scripts",
       label: "Remove scripts and actions",
       detail: "Sanitize PDF deletes open actions, additional actions and document JavaScript in one pass.",
-      href: "#/tool/sanitize",
+      href: "/sanitize-pdf",
     },
     "open-action": {
       id: "sanitize-open",
       label: "Remove the automatic open action",
       detail: "Sanitize PDF strips /OpenAction so nothing runs or navigates when the file opens.",
-      href: "#/tool/sanitize",
+      href: "/sanitize-pdf",
     },
     attachments: {
       id: "sanitize-files",
       label: "Strip embedded attachments",
       detail: "Attachments often carry data the author forgot about. Sanitize PDF removes them.",
-      href: "#/tool/sanitize",
+      href: "/sanitize-pdf",
     },
     xfa: {
       id: "sanitize-xfa",
       label: "Flatten or remove the XFA bundle",
       detail: "Sanitize PDF removes form fields and XFA data, or flatten the form if you need to keep its appearance.",
-      href: "#/tool/sanitize",
+      href: "/sanitize-pdf",
     },
     "no-text": {
       id: "ocr",
       label: "OCR the scanned pages",
       detail: "OCR PDF adds an invisible text layer so the document becomes searchable, copyable and readable aloud.",
-      href: "#/tool/ocr",
+      href: "/ocr-pdf",
     },
     "partial-scan": {
       id: "ocr-partial",
       label: "OCR the image-only pages",
       detail: "Only the pages without text need OCR; the rest keep their existing text layer.",
-      href: "#/tool/ocr",
+      href: "/ocr-pdf",
     },
     geometry: {
       id: "resize",
       label: "Resize the oversized pages",
       detail: "Very large page geometry slows viewers and can hit canvas limits. Resize PDF scales them to a print size.",
-      href: "#/tool/resize",
+      href: "/resize",
     },
     fonts: {
       id: "embed-fonts",

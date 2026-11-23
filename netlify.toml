@@ -6,12 +6,16 @@
 [build.environment]
   NODE_VERSION = "20"
   NPM_FLAGS = "--no-audit --no-fund"
+  # Single public origin for canonicals, sitemap, robots and OG tags.
+  # Override in the Netlify UI for a custom domain or staging deployment.
+  SITE_URL = "https://paperlypdf.com"
 
-# Single-page app: real prerendered files take precedence over this fallback.
-[[redirects]]
-  from = "/*"
-  to = "/index.html"
-  status = 200
+# Routing lives in the generated dist/_redirects file, so the 301s from the
+# legacy /tool/:id and /tools/:id URLs are ordered *before* the SPA fallback.
+# scripts/prerender.mjs rewrites it on every build:
+#   /tool/merge  /merge-pdf  301
+#   /merge-pdf   served from /merge-pdf/index.html
+#   /*           /index.html  200   (client-only routes such as /activity)
 
 [[headers]]
   for = "/*"
@@ -26,12 +30,24 @@
     # NOTE: 'unsafe-inline' covers the inline style attributes generated from user-selected
     # options; every script is same-origin (self-hosted bundles, blob workers) plus the pinned
     # OCR CDN. Fonts are self-hosted, so no font CDN origins are allowed.
-    Content-Security-Policy = "default-src 'self'; base-uri 'self'; object-src 'none'; frame-src 'none'; frame-ancestors 'none'; form-action 'none'; script-src 'self' 'wasm-unsafe-eval' blob: https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self' blob: data: https://cdn.jsdelivr.net https://tessdata.projectnaptha.com; worker-src 'self' blob: https://cdn.jsdelivr.net; child-src 'self' blob:; manifest-src 'self'; upgrade-insecure-requests"
+    Content-Security-Policy = "default-src 'self'; base-uri 'self'; object-src 'none'; frame-src 'none'; frame-ancestors 'none'; form-action 'none'; script-src 'self' 'wasm-unsafe-eval' blob: https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self' blob: data: https://cdn.jsdelivr.net https://tessdata.projectnaptha.com https://api.lemonsqueezy.com; worker-src 'self' blob: https://cdn.jsdelivr.net; child-src 'self' blob:; manifest-src 'self'; upgrade-insecure-requests"
 
 [[headers]]
   for = "/index.html"
   [headers.values]
     Cache-Control = "public, max-age=0, must-revalidate"
+
+[[headers]]
+  for = "/sitemap.xml"
+  [headers.values]
+    Content-Type = "application/xml; charset=utf-8"
+    Cache-Control = "public, max-age=3600"
+
+[[headers]]
+  for = "/robots.txt"
+  [headers.values]
+    Content-Type = "text/plain; charset=utf-8"
+    Cache-Control = "public, max-age=3600"
 
 [[headers]]
   for = "/assets/*"

@@ -38,6 +38,8 @@ const SHELL_FILES = [
   "/pdf.worker.min.mjs",
   "/site.webmanifest",
   "/robots.txt",
+  "/sitemap.xml",
+  "/theme-init.js",
   "/og-image.svg",
   "/icons/icon.svg",
   "/icons/icon-maskable.svg",
@@ -87,6 +89,16 @@ function buildPrecacheList() {
     for (const absolute of listFiles(path.join(dist, dir))) {
       if (pattern.test(absolute)) files.set(toUrl(absolute), absolute);
     }
+  }
+
+  // Precache every prerendered route (/, /tools, /privacy, /help and all clean
+  // tool slugs) so a direct visit to a deep tool page works on the very first
+  // offline load, not only after that page has been visited once.
+  for (const absolute of listFiles(dist)) {
+    if (path.basename(absolute) !== "index.html") continue;
+    const relative = path.relative(dist, absolute).split(path.sep).join("/");
+    if (relative === "index.html") continue;
+    files.set(toUrl(absolute), absolute);
   }
 
   // Remote worker sources are already content-versioned; cache them at runtime only.
@@ -169,6 +181,19 @@ async function navigationResponse(request) {
     const runtime = await caches.open(RUNTIME_CACHE);
     const cachedPage = await runtime.match(request);
     if (cachedPage) return cachedPage;
+    // Prerendered routes are precached as "/<route>/index.html"; map a direct
+    // navigation to that key so an offline deep link gets its real page.
+    try {
+      const url = new URL(request.url);
+      if (url.origin === self.location.origin) {
+        const pathname = url.pathname.endsWith("/") ? url.pathname : url.pathname + "/";
+        const routeKey = pathname + "index.html";
+        const routePage = await caches.match(routeKey, { cacheName: PRECACHE_CACHE });
+        if (routePage) return routePage;
+      }
+    } catch {
+      /* fall through to the shell */
+    }
     const shell = await caches.match(APP_SHELL, { cacheName: PRECACHE_CACHE });
     if (shell) return shell;
     console.warn("[Paperly SW] navigation failed offline with no shell", error);

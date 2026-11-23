@@ -1,4 +1,5 @@
 import {
+  ArrowRight,
   Calendar,
   Check,
   ChevronDown,
@@ -15,6 +16,8 @@ import {
   Plus,
   RotateCw,
   Save,
+  Images,
+  ScanText,
   ShieldCheck,
   Trash2,
   Type,
@@ -33,6 +36,7 @@ import {
   hexToRgb,
   openPdfJs,
   openPdfLib,
+  dataUrlToBytes,
   readFileBytes,
   renderPdfPage,
   safePdfText,
@@ -42,6 +46,9 @@ import {
 } from "@/lib/pdf";
 import { recompressImages } from "@/tools/Optimize";
 import { useInitialFiles, usePdfFile } from "@/lib/usePdf";
+import { FREE_BATCH_LIMIT, ProBadge, usePro } from "@/lib/pro";
+import { ocrPdfToSearchable } from "@/lib/ocrBatch";
+import { DEFAULT_SANITIZE_OPTIONS, sanitizePdf } from "@/tools/Privacy";
 import {
   Alert,
   Badge,
@@ -80,7 +87,7 @@ function csvCell(value: string): string {
 /* ================================================================== *
  * BATCH PDF — iLovePDF caps this on free; Paperly does not.
  * ================================================================== */
-type BatchOp = "compress" | "rotate" | "protect" | "numbers" | "watermark" | "flatten";
+type BatchOp = "compress" | "rotate" | "protect" | "numbers" | "watermark" | "flatten" | "sanitize" | "ocr" | "jpg";
 type QueueStatus = "pending" | "running" | "done" | "failed";
 
 const LEVELS = {
@@ -107,6 +114,9 @@ const BATCH_OPERATIONS: { value: BatchOp; label: string; icon: typeof Layers; de
   { value: "numbers", label: "Page numbers", icon: ListOrdered, description: "Bottom or top, with your own format" },
   { value: "watermark", label: "Watermark", icon: Type, description: "Diagonal text over every page" },
   { value: "flatten", label: "Flatten", icon: FileCheck2, description: "Bakes form fields into the page" },
+  { value: "sanitize", label: "Sanitize", icon: ShieldCheck, description: "Strips metadata, scripts, attachments and hidden actions" },
+  { value: "ocr", label: "OCR", icon: ScanText, description: "Adds a searchable English text layer to scans (≤50 pages)" },
+  { value: "jpg", label: "PDF → JPG", icon: Images, description: "Exports every page as a JPEG inside a ZIP" },
 ];
 
 interface BatchPrefs extends Record<string, unknown> {
@@ -165,9 +175,13 @@ export function BatchTool() {
     watermarkColor: "#e8613c",
     watermarkRotation: 35,
   });
+  const pro = usePro();
   const job = useJob<void>();
   const [items, setItems] = useState<QueueItem[]>(() =>
-    initial.filter((file) => /\.pdf$/i.test(file.name) || file.type === "application/pdf").map(toQueueItem),
+    initial
+      .filter((file) => /\.pdf$/i.test(file.name) || file.type === "application/pdf")
+      .slice(0, pro.isPro ? undefined : FREE_BATCH_LIMIT)
+      .map(toQueueItem),
   );
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
@@ -191,7 +205,13 @@ export function BatchTool() {
             ? "numbered"
             : operation === "flatten"
               ? "flattened"
-              : "watermarked";
+              : operation === "sanitize"
+                ? "sanitized"
+                : operation === "ocr"
+                  ? "searchable"
+                  : operation === "jpg"
+                    ? "images"
+                    : "watermarked";
 
   const transform = async (file: File): Promise<Uint8Array> => {
     const buffer = await readFileBytes(file);
@@ -202,6 +222,24 @@ export function BatchTool() {
         () => undefined,
       );
       return result.bytes;
+    }
+    if (op === "sanitize") {
+      const result = await sanitizePdf(buffer, DEFAULT_SANITIZE_OPTIONS, () => undefined);
+      return result.bytes;
+    }
+    if (op === "ocr") {
+      return ocrPdfToSearchable(buffer, () => undefined);
+    }
+    if (op === "jpg") {
+      const JSZip = (await import("jszip")).default;
+      const zip = new JSZip();
+      const source = await openPdfJs(buffer);
+      for (let page = 1; page <= source.numPages; page++) {
+        const rendered = await renderPdfPage(source, page, { targetWidth: 1654, type: "image/jpeg", quality: 0.9 });
+        zip.file(`page-${String(page).padStart(3, "0")}.jpg`, dataUrlToBytes(rendered.dataUrl));
+      }
+      await source.destroy().catch(() => undefined);
+      return new Uint8Array(await (await zip.generateAsync({ type: "blob", compression: "DEFLATE" })).arrayBuffer());
     }
     const doc = await openPdfLib(buffer);
     if (op === "protect") {
@@ -283,6 +321,10 @@ export function BatchTool() {
       setProblem("Add at least one PDF.");
       return;
     }
+    if (!pro.isPro && (targets ?? items.map((item) => item.id)).length > FREE_BATCH_LIMIT) {
+      pro.openUpgrade(`Batch runs over ${FREE_BATCH_LIMIT} files are part of Paperly Pro. Every single-file tool remains free.`);
+      return;
+    }
     if (invalid) {
       setProblem("Use a password of at least 4 characters and make sure both fields match.");
       return;
@@ -316,7 +358,7 @@ export function BatchTool() {
                     status: "done",
                     bytes,
                     after: bytes.byteLength,
-                    outputName: `${sanitizeName(baseName(entry.file.name))}-${suffixFor(operation)}.pdf`,
+                    outputName: `${sanitizeName(baseName(entry.file.name))}-${suffixFor(operation)}.${operation === "jpg" ? "zip" : "pdf"}`,
                   }
                 : item,
             ),
@@ -391,7 +433,18 @@ export function BatchTool() {
         problems.push(friendlyProcessingError(err, `${candidate.name} couldn’t be added.`));
       }
     }
-    if (valid.length) setItems((current) => [...current, ...valid.map(toQueueItem)]);
+    if (valid.length) {
+      const room = pro.isPro ? valid.length : Math.max(0, FREE_BATCH_LIMIT - items.length);
+      const accepted = valid.slice(0, room);
+      if (accepted.length < valid.length) {
+        pro.openUpgrade(
+          `Batch runs over ${FREE_BATCH_LIMIT} files are part of Paperly Pro. ${valid.length - accepted.length} file${
+            valid.length - accepted.length === 1 ? " was" : "s were"
+          } not added.`,
+        );
+      }
+      if (accepted.length) setItems((current) => [...current, ...accepted.map(toQueueItem)]);
+    }
     setProblem(problems.join(" "));
   };
 
@@ -407,13 +460,23 @@ export function BatchTool() {
   return (
     <div className="space-y-5">
       <div className="rounded-xl border border-forest/15 bg-lime/20 p-3.5">
-        <p className="flex items-center gap-1.5 text-[12.5px] font-semibold text-forest">
-          <Layers className="h-4 w-4" /> Batch processing with no artificial cap
+        <p className="flex flex-wrap items-center gap-1.5 text-[12.5px] font-semibold text-forest">
+          <Layers className="h-4 w-4" /> Batch processing, on your device
+          {!pro.isPro && <ProBadge />}
         </p>
         <p className="mt-1 text-[11.5px] leading-relaxed text-forest/90">
-          Apply one operation to many PDFs and download a ZIP with a CSV report. Every file is processed locally, so the only limit is
-          your device’s memory — no per-task file counts, no size ceiling, no ads.
+          Apply one operation to many PDFs and download a ZIP with a CSV report. Every file is processed locally. The free plan runs up to{" "}
+          {FREE_BATCH_LIMIT} files per batch; <strong>Paperly Pro</strong> removes the limit for high-volume commercial work.
         </p>
+        {!pro.isPro && (
+          <button
+            type="button"
+            onClick={() => pro.openUpgrade(`Batch runs over ${FREE_BATCH_LIMIT} files are part of Paperly Pro.`)}
+            className="mt-2 inline-flex h-8 items-center gap-1.5 rounded-lg bg-forest px-2.5 text-[11px] font-semibold text-paper"
+          >
+            Unlock unlimited batch <ArrowRight className="h-3 w-3 text-lime" />
+          </button>
+        )}
       </div>
 
       {items.length === 0 ? (
@@ -422,12 +485,8 @@ export function BatchTool() {
           acceptLabel="PDF files"
           multiple
           sample={SAMPLE.pdf}
-          hint="Add as many PDFs as you like; each one is processed separately."
-          onFiles={(picked) => {
-            const valid = picked.filter((file) => /\.pdf$/i.test(file.name) || file.type === "application/pdf");
-            setItems(valid.map(toQueueItem));
-            setProblem("");
-          }}
+          hint={`Add up to ${pro.isPro ? "unlimited" : FREE_BATCH_LIMIT} PDFs; each one is processed separately.`}
+          onFiles={(picked) => void addFiles(picked)}
         />
       ) : (
         <div className="space-y-2">

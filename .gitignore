@@ -23,6 +23,7 @@ tests/fixtures/*.zip
 
 # Playwright browser downloads kept inside the workspace
 .pw-browsers/
+.playwright-browsers/
 
 # Generated preview build (never commit)
 dist-preview/

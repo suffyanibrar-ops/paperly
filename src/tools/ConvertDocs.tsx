@@ -74,7 +74,7 @@ const PAPER_LABEL: Record<PaperKey, string> = { a4: "A4", letter: "US Letter", l
 /** Fires the OCR tool when a PDF has no text layer, without silently OCR-ing. */
 function OcrLink() {
   return (
-    <a href="#/tool/ocr" className="font-semibold underline">
+    <a href="/ocr-pdf" className="font-semibold underline">
       Open OCR PDF
     </a>
   );

@@ -390,11 +390,11 @@ export function FillFormsTool() {
       {pdf.bytes && !loadingFields && fields.length === 0 && (
         <Alert tone="info" title="No interactive fields found">
           This PDF doesn’t contain a standard AcroForm. Paperly can’t infer a fillable form from a flat page — use the{" "}
-          <a href="#/tool/edit" className="font-semibold underline">
+          <a href="/edit-pdf" className="font-semibold underline">
             Edit PDF
           </a>{" "}
           or{" "}
-          <a href="#/tool/sign" className="font-semibold underline">
+          <a href="/sign-pdf" className="font-semibold underline">
             Sign PDF
           </a>{" "}
           tool to place text boxes or a signature instead.
