@@ -30,6 +30,10 @@ jobs:
         run: npm run build
         env:
           PAPERLY_BASE: /paperly/
+          # The Pages project site is the public preview; keep its canonical,
+          # sitemap and OG URLs self-referencing. Change this when a custom
+          # domain (paperlypdf.com) is attached.
+          SITE_URL: https://suffyanibrar-ops.github.io/paperly
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v5
         with:

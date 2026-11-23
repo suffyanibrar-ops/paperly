@@ -24,6 +24,8 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const dist = path.join(root, "dist");
 const ORIGIN = (process.env.SITE_URL || process.env.VITE_SITE_URL || "https://paperlypdf.com").replace(/\/+$/, "");
 const SITE_HOST = new URL(ORIGIN).host;
+const RAW_BASE = process.env.PAPERLY_BASE || "/";
+const BASE_PREFIX = RAW_BASE === "./" || RAW_BASE === "/" ? "" : `/${RAW_BASE.replace(/^\/+/, "").replace(/\/+$/, "")}`;
 const HEAD_MARKER = "<!--SEO_HEAD-->";
 const BODY_MARKER = "<!--SEO_BODY-->";
 const DEFAULT_TITLE = "Paperly — Private PDF tools that work in your browser";
@@ -329,13 +331,14 @@ async function writeRoute(template, route, title, head, body) {
     throw new Error("index.html is missing the SEO markers required for safe prerendering.");
   }
   // split/join avoids `$` replacement-pattern expansion inside the inlined bundle.
+  const basedBody = BASE_PREFIX ? body.replace(/href="\/(?!\/)/g, `href="${BASE_PREFIX}/`) : body;
   const html = template
     .split(DEFAULT_TITLE)
     .join(escape(title))
     .split(HEAD_MARKER)
     .join(head)
     .split('<div id="root"><!--SEO_BODY--></div>')
-    .join(`<div id="root">${body}</div>`);
+    .join(`<div id="root">${basedBody}</div>`);
   if (route === "/") {
     await fs.writeFile(path.join(dist, "index.html"), html, "utf8");
   } else {
@@ -516,6 +519,18 @@ ${urls
   <text x="72" y="560" font-family="system-ui,sans-serif" font-size="22" fill="#d9f26c">${escape(SITE_HOST)}</text>
 </svg>`;
   await fs.writeFile(path.join(dist, "og-image.svg"), og, "utf8");
+
+  // GitHub Pages (a project site under /paperly/) has no rewrite engine. A
+  // 404.html copy of the SPA shell keeps client-only routes such as /activity
+  // working on direct visits, while Netlify uses its generated _redirects.
+  const notFound = template
+    .split(DEFAULT_TITLE)
+    .join("Page not found — Paperly PDF")
+    .split(HEAD_MARKER)
+    .join('<meta name="robots" content="noindex" />')
+    .split('<div id="root"><!--SEO_BODY--></div>')
+    .join('<div id="root"><main style="max-width:40rem;margin:0 auto;padding:3rem 1.25rem;font-family:system-ui,sans-serif"><h1>Page not found</h1><p><a href="/tools">Browse all 51 tools</a></p></main></div>');
+  await fs.writeFile(path.join(dist, "404.html"), BASE_PREFIX ? notFound.replace(/href="\/(?!\/)/g, `href="${BASE_PREFIX}/`) : notFound, "utf8");
 
   console.log(
     `Prerendered ${urls.length} routes (${tools.length} tool slugs) + sitemap.xml + robots.txt + _redirects for ${ORIGIN}`,

@@ -84,7 +84,12 @@ function browserPath(path: string): string {
 }
 
 export function navigate(path: string) {
-  const clean = path.startsWith("/") ? path : `/${path}`;
+  let clean = path.startsWith("/") ? path : `/${path}`;
+  const base = import.meta.env.BASE_URL || "/";
+  if (base !== "/" && base !== "./") {
+    const prefix = base.replace(/\/+$/, "");
+    if (clean === prefix || clean.startsWith(`${prefix}/`)) clean = clean.slice(prefix.length) || "/";
+  }
   if (currentPath() === clean) {
     window.scrollTo({ top: 0, behavior: "smooth" });
     return;

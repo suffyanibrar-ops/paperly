@@ -42,9 +42,15 @@ jobs:
           test -f dist/pdf.worker.min.mjs
           test -f dist/sw.js
           test -f dist/sitemap.xml
+          test -f dist/robots.txt
+          test -f dist/_redirects
+          test -f dist/404.html
           test -f dist/og-image.svg
-          test -d dist/tool
-          node -e "const fs=require('fs');const html=fs.readFileSync('dist/index.html','utf8');if(!/<div id=\"root\">/.test(html))throw new Error('missing app root');if(!/assets\/.+\.js/.test(html))throw new Error('missing hashed entry chunk');console.log('build artefacts OK')"
+          test -f dist/merge-pdf/index.html
+          test -f dist/privacy/index.html
+          test -f dist/tools/index.html
+          test -f dist/workflows/index.html
+          node -e "const fs=require('fs');const html=fs.readFileSync('dist/index.html','utf8');if(!/<div id=\"root\">/.test(html))throw new Error('missing app root');if(!/assets\/.+\.js/.test(html))throw new Error('missing hashed entry chunk');const routeDirs=fs.readdirSync('dist').filter(d=>fs.existsSync('dist/'+d+'/index.html'));if(routeDirs.length<62)throw new Error('missing prerendered routes: '+routeDirs.length);const sm=fs.readFileSync('dist/sitemap.xml','utf8');if((sm.match(/<url>/g)||[]).length<63)throw new Error('sitemap missing URLs');console.log('build artefacts OK — '+routeDirs.length+' routes')"
       - name: Upload build
         uses: actions/upload-artifact@v4
         with:

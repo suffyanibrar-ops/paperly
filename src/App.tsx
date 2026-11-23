@@ -137,6 +137,25 @@ export default function App() {
 
   useEffect(() => installLinkInterceptor(), []);
 
+  // On a project-site deployment (GitHub Pages /paperly/) prefix same-origin
+  // anchors that the prerenderer could not rewrite (React-rendered links).
+  useEffect(() => {
+    const base = import.meta.env.BASE_URL || "/";
+    if (base === "/" || base === "./") return;
+    const prefix = base.replace(/\/+$/, "");
+    const rewrite = () => {
+      document.querySelectorAll<HTMLAnchorElement>('a[href^="/"]').forEach((anchor) => {
+        const href = anchor.getAttribute("href");
+        if (!href || href.startsWith("//") || href === prefix || href.startsWith(`${prefix}/`)) return;
+        anchor.setAttribute("href", `${prefix}${href}`);
+      });
+    };
+    rewrite();
+    const observer = new MutationObserver(rewrite);
+    observer.observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ["href"] });
+    return () => observer.disconnect();
+  }, []);
+
   let page: ReactNode;
   if (path === "/" || path === "") page = <Home />;
   else if (path === "/tools") {
