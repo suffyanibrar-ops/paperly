@@ -31,6 +31,7 @@ import {
   type FontPack,
 } from "@/lib/pdf";
 import { detectColumns, extractDocument, linesToParagraphs, type ExtractedPage } from "@/lib/extract";
+import { buildWordBlocks } from "@/lib/wordLayout";
 import { tableToCsv } from "@/lib/tables";
 import { useInitialFiles, usePdfFile, usePdfThumbs } from "@/lib/usePdf";
 import { copyText } from "@/lib/router";
@@ -336,25 +337,36 @@ export function PdfToWordTool() {
               );
             });
           } else {
-            const blocks = linesToParagraphs(page.lines);
-            blocks.forEach((block, blockIndex) => {
-              const titleLike =
-                opts.value.headingDetection &&
-                block.length < 90 &&
-                blockIndex === 0 &&
-                !/[.!?]$/.test(block) &&
-                pageIndex === 0;
+            const blocks = buildWordBlocks(page);
+            blocks.forEach((block) => {
+              const isHeading = opts.value.headingDetection && block.kind === "heading";
+              const heading =
+                isHeading && block.level === 1
+                  ? HeadingLevel.HEADING_1
+                  : isHeading && block.level === 2
+                    ? HeadingLevel.HEADING_2
+                    : isHeading
+                      ? HeadingLevel.HEADING_3
+                      : undefined;
+              const alignment =
+                block.align === "center" ? AlignmentType.CENTER : block.align === "right" ? AlignmentType.RIGHT : AlignmentType.LEFT;
+              const size = Math.round(Math.min(72, Math.max(7, block.fontSize)) * 2);
               children.push(
                 new Paragraph({
-                  heading: titleLike ? HeadingLevel.HEADING_1 : undefined,
-                  spacing: { after: titleLike ? 240 : 140, line: 300 },
-                  alignment: AlignmentType.LEFT,
+                  heading,
+                  bullet: block.kind === "bullet" ? { level: 0 } : undefined,
+                  indent: { left: Math.round(block.indent * 20) },
+                  spacing: {
+                    after: isHeading ? 240 : 120,
+                    line: Math.round(Math.max(12, block.fontSize * 1.5) * 20),
+                  },
+                  alignment,
                   children: [
                     new TextRun({
-                      text: block,
-                      size: titleLike ? 34 : 22,
+                      text: block.text,
+                      size,
                       font: "Calibri",
-                      bold: titleLike,
+                      bold: isHeading || block.bold,
                     }),
                   ],
                 }),

@@ -2,7 +2,14 @@
 
 Status legend: **VERIFIED** = implemented and output-checked this cycle. **NOT REVIEWED** = existing baseline only; do not treat as upgraded. **BLOCKED** = requires a decision or missing capability.
 
-## Edit PDF batch (this cycle)
+## PDF → Word batch (this cycle)
+
+- Added `src/lib/wordLayout.ts`: geometry-based heading levels, paragraphs, bullets, alignment and indentation.
+- DOCX now uses real Word Heading 1/2/3 styles, bullet lists, source font sizes (converted to half-points), left indents and centre/right alignment.
+- Preserves page breaks and images; numbered lists keep their visible marker because Word numbering IDs are document-global.
+- Verified by `tests/unit/wordLayout.test.ts` (4 tests) and the existing DOCX output E2E test.
+
+## Edit PDF batch (previous cycle)
 
 - Added Helvetica/Times/Courier text families, line height, rotation, text backgrounds, underline and strikethrough.
 - Added freehand pen, translucent marker and visual note elements.
@@ -24,7 +31,7 @@ Status legend: **VERIFIED** = implemented and output-checked this cycle. **NOT R
 | `page-numbers` | Page numbers | NOT REVIEWED | Baseline E2E coverage only in this cycle. |
 | `jpg-to-pdf` | JPG to PDF | NOT REVIEWED | Baseline E2E coverage only in this cycle. |
 | `pdf-to-jpg` | PDF to JPG | NOT REVIEWED | Baseline E2E coverage only in this cycle. |
-| `pdf-to-word` | PDF to Word | NOT REVIEWED | Baseline E2E coverage only in this cycle. |
+| `pdf-to-word` | PDF to Word | VERIFIED | Geometry-based headings, paragraphs, bullets, alignment, indentation; DOCX output E2E + 4 layout unit tests. |
 | `pdf-to-excel` | PDF to Excel | NOT REVIEWED | Baseline E2E coverage only in this cycle. |
 | `pdf-to-ppt` | PDF to PowerPoint | NOT REVIEWED | Baseline E2E coverage only in this cycle. |
 | `word-to-pdf` | Word to PDF | NOT REVIEWED | Baseline E2E coverage only in this cycle. |
@@ -68,7 +75,7 @@ Status legend: **VERIFIED** = implemented and output-checked this cycle. **NOT R
 
 ## Next batch
 
-1. PDF → Word / Excel / PowerPoint reconstruction quality.
+1. PDF → Excel table detection and PDF → PowerPoint reconstruction quality.
 2. Edit PDF: page management and hyperlink annotations.
 3. Compression/recovery edge cases.
 4. Remaining tools in registry order.

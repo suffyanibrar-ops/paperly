@@ -188,7 +188,7 @@ test("edit: adds text and preserves the original pages", async ({ page }) => {
   await openTool(page, "edit");
   await upload(page, fixture("sample.pdf"));
   await page.waitForTimeout(2200);
-  await page.getByTitle("Text").click();
+  await page.getByRole("button", { name: "Text", exact: true }).click();
   const surface = page.locator("img[alt^='Page 1']").first();
   await surface.scrollIntoViewIfNeeded();
   const box = await surface.boundingBox();

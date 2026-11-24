@@ -5,6 +5,7 @@ interface TextItem {
   transform: number[];
   width: number;
   height: number;
+  fontName?: string;
 }
 import { openPdfJs, parseRanges, uniqueInOrder } from "@/lib/pdf";
 
@@ -12,6 +13,8 @@ export interface LineItem {
   str: string;
   x: number;
   width: number;
+  fontSize: number;
+  fontName: string;
 }
 
 export interface ExtractedLine {
@@ -20,6 +23,8 @@ export interface ExtractedLine {
   y: number;
   width: number;
   height: number;
+  fontSize: number;
+  fontName: string;
   items: LineItem[];
 }
 
@@ -60,7 +65,13 @@ export async function extractPage(doc: PDFDocumentProxy, pageNumber: number): Pr
     const lineItems: LineItem[] = [];
     for (const item of sorted) {
       const x = item.transform[4] as number;
-      lineItems.push({ str: item.str, x, width: item.width });
+      lineItems.push({
+        str: item.str,
+        x,
+        width: item.width,
+        fontSize: Math.abs((item.transform[3] as number) || item.height || 10),
+        fontName: item.fontName ?? "",
+      });
       if (prev) {
         const gap = x - ((prev.transform[4] as number) + prev.width);
         const needsSpace = gap > Math.max(0.8, (prev.height || 10) * 0.12) && !/\s$/.test(text) && !/^\s/.test(item.str);
@@ -73,12 +84,15 @@ export async function extractPage(doc: PDFDocumentProxy, pageNumber: number): Pr
     const last = sorted[sorted.length - 1];
     const x = first.transform[4] as number;
     const width = last.transform[4] + last.width - x;
+    const fontSizes = lineItems.map((item) => item.fontSize).sort((a, b) => a - b);
     return {
       text: text.replace(/\s+/g, " ").trim(),
       x,
       y: row.y,
       width,
       height: row.height,
+      fontSize: fontSizes[Math.floor(fontSizes.length / 2)] ?? row.height,
+      fontName: lineItems[0]?.fontName ?? "",
       items: lineItems,
     };
   });
